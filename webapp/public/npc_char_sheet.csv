@@ -1,3 +1,4 @@
+!!traits
 !identifying traits,,,,
 name,,,,
 age,,,,
@@ -106,4 +107,5 @@ steal technology during mission that will help mutiny,,,,
 !item,!type,!function,,
 ,,,,
 !!history,,,,
+
 !events,!importance,!effects,,
