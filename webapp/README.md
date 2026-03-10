@@ -88,8 +88,9 @@ This path works even without model loading because fallback mode is automatic.
 Troubleshooting:
 
 - If you see `requested maxComputeWorkgroupStorageSize exceeds limit`, your device GPU limit is below WebLLM runtime requirements.
-- The app now pre-checks this and disables model load when incompatible.
-- You can still use `Generate NPC Action` through rules-only fallback mode.
+- On iOS only, when this low-limit condition is detected, the app switches to an iOS lite local model path for generation.
+- Android/WebLLM behavior is unchanged.
+- If iOS lite model loading fails, `Generate NPC Action` still falls back to rules-only mode.
 
 ### Optional: upload your own CSV
 

@@ -24,6 +24,16 @@ type RolledTrait = {
   value: string;
 };
 
+type IosLiteGeneratorOutput = Array<{ generated_text?: string }>;
+type IosLiteGenerator = (
+  input: string,
+  options?: {
+    max_new_tokens?: number;
+    temperature?: number;
+    do_sample?: boolean;
+  },
+) => Promise<IosLiteGeneratorOutput>;
+
 const MODELS = [
   {
     id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
@@ -53,6 +63,18 @@ const DEFAULT_SITUATION =
 const REQUIRED_WORKGROUP_STORAGE_SIZE = 32768;
 
 const normalize = (value: string) => value.trim().toLowerCase();
+
+const detectIOS = (): boolean => {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  const userAgent = navigator.userAgent ?? "";
+  const iOSInUserAgent = /iPad|iPhone|iPod/i.test(userAgent);
+  const iPadDesktopMode =
+    navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  return iOSInUserAgent || iPadDesktopMode;
+};
 
 const pickWeighted = (items: WeightedTrait[]): string => {
   const total = items.reduce((sum, item) => sum + item.weight, 0);
@@ -126,13 +148,28 @@ function App() {
   const [gpuCheckReason, setGpuCheckReason] = useState<string>("");
   const [adapterWorkgroupStorageLimit, setAdapterWorkgroupStorageLimit] =
     useState<number | null>(null);
+  const [iosLiteStatus, setIosLiteStatus] = useState<
+    "idle" | "loading" | "ready" | "failed"
+  >("idle");
+  const [iosLiteMessage, setIosLiteMessage] = useState<string>("");
   const engineRef = useRef<MLCEngineInterface | null>(null);
+  const iosLiteGeneratorRef = useRef<IosLiteGenerator | null>(null);
 
   const gpuApi =
     typeof navigator !== "undefined"
       ? (navigator as NavigatorWithGpu).gpu
       : undefined;
   const webGpuAvailable = Boolean(gpuApi);
+  const forceIosLiteMode =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("force_ios_lite") === "1";
+  const isIOS = detectIOS() || forceIosLiteMode;
+  const iosLowGpuLimit =
+    isIOS &&
+    (forceIosLiteMode ||
+      (adapterWorkgroupStorageLimit !== null &&
+        adapterWorkgroupStorageLimit < REQUIRED_WORKGROUP_STORAGE_SIZE));
+  const iosLiteModeActive = iosLowGpuLimit && !webGpuCompatible;
 
   const traitCount = useMemo(
     () => Object.keys(traitTable).length,
@@ -204,6 +241,43 @@ function App() {
     setStatusText(
       `Loaded built-in sample traits (${Object.keys(nextTable).length} groups).`,
     );
+  };
+
+  const ensureIosLiteGenerator = async (): Promise<IosLiteGenerator> => {
+    if (iosLiteGeneratorRef.current) {
+      return iosLiteGeneratorRef.current;
+    }
+
+    setIosLiteStatus("loading");
+    setIosLiteMessage(
+      "Loading iOS lite local model (first run may take a while)...",
+    );
+
+    try {
+      const transformers = (await import("@huggingface/transformers")) as {
+        pipeline: (
+          task: string,
+          model: string,
+        ) => Promise<IosLiteGenerator>;
+      };
+      const generator = await transformers.pipeline(
+        "text2text-generation",
+        "Xenova/flan-t5-small",
+      );
+
+      iosLiteGeneratorRef.current = generator;
+      setIosLiteStatus("ready");
+      setIosLiteMessage("iOS lite local model is ready.");
+      return generator;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not initialize iOS lite local model.";
+      setIosLiteStatus("failed");
+      setIosLiteMessage(message);
+      throw error;
+    }
   };
 
   useEffect(() => {
@@ -278,6 +352,14 @@ function App() {
     };
   }, [gpuApi, webGpuAvailable]);
 
+  useEffect(() => {
+    if (iosLiteModeActive && iosLiteStatus === "idle") {
+      setIosLiteMessage(
+        "iOS low-GPU mode detected. Using a lightweight local model instead of WebLLM.",
+      );
+    }
+  }, [iosLiteModeActive, iosLiteStatus]);
+
   const handleCsvUpload = async (file: File | undefined) => {
     if (!file) {
       return;
@@ -346,7 +428,9 @@ function App() {
 
     if (!webGpuCompatible) {
       setErrorText(
-        `This device cannot run the WebLLM runtime. ${gpuCheckReason} Use rules-only fallback mode.`,
+        iosLiteModeActive
+          ? `This iOS device cannot run the standard WebLLM runtime. ${gpuCheckReason} iOS lite local model mode is available when you generate.`
+          : `This device cannot run the WebLLM runtime. ${gpuCheckReason} Use rules-only fallback mode.`,
       );
       return;
     }
@@ -395,6 +479,51 @@ function App() {
     setStatusText("Generating NPC action...");
 
     if (!engineRef.current || !modelReady) {
+      if (iosLiteModeActive) {
+        try {
+          setStatusText("Generating with iOS lite local model...");
+          const generator = await ensureIosLiteGenerator();
+          const traitSummary =
+            rolledTraits.length > 0
+              ? rolledTraits
+                  .map((entry) => `${entry.trait}: ${entry.value}`)
+                  .join(", ")
+              : "no specific rolled traits";
+          const prompt = [
+            "Write one concise tabletop RPG NPC action response in 2-4 sentences.",
+            `Traits: ${traitSummary}.`,
+            `Situation: ${situation.trim()}`,
+            "Response:",
+          ].join(" ");
+
+          const result = await generator(prompt, {
+            max_new_tokens: 120,
+            do_sample: true,
+            temperature: 0.8,
+          });
+          const generated = result[0]?.generated_text?.trim() ?? "";
+          if (!generated) {
+            throw new Error("iOS lite model returned empty text.");
+          }
+
+          setActionOutput(generated);
+          setStatusText("Action generated with iOS lite local model.");
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "iOS lite model generation failed.";
+          setErrorText(message);
+          setActionOutput(fallbackAction(situation, rolledTraits));
+          setStatusText(
+            "iOS lite generation failed; showing rules-only fallback action.",
+          );
+        } finally {
+          setIsGenerating(false);
+        }
+        return;
+      }
+
       const fallback = fallbackAction(situation, rolledTraits);
       setActionOutput(fallback);
       setStatusText("Generated with rules-only fallback.");
@@ -549,6 +678,23 @@ function App() {
           <strong>{webGpuCompatible ? "compatible" : "not compatible"}</strong>
         </p>
         {gpuCheckReason && <p className="meta">{gpuCheckReason}</p>}
+        {iosLiteModeActive && (
+          <>
+            <p className="meta">
+              iOS lite local mode:{" "}
+              <strong>
+                {iosLiteStatus === "ready"
+                  ? "ready"
+                  : iosLiteStatus === "loading"
+                    ? "loading"
+                    : iosLiteStatus === "failed"
+                      ? "failed"
+                      : "available"}
+              </strong>
+            </p>
+            {iosLiteMessage && <p className="meta">{iosLiteMessage}</p>}
+          </>
+        )}
         <p className="meta">
           LLM status: <strong>{modelReady ? "ready" : "not loaded"}</strong>
         </p>
