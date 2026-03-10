@@ -1085,7 +1085,7 @@ function App() {
     ].join("\n");
 
     const response = await engineRef.current.chat.completions.create({
-      temperature: 0.2,
+      temperature: 0,
       max_tokens: 420,
       messages: [
         { role: "system", content: systemPrompt },
@@ -1137,8 +1137,8 @@ function App() {
 
     const result = await generator(litePrompt, {
       max_new_tokens: 200,
-      do_sample: true,
-      temperature: 0.7,
+      do_sample: false,
+      temperature: 0,
     });
     const raw = result[0]?.generated_text?.trim() ?? "";
     const structured = parseStructuredOutput(raw);
