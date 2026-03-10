@@ -99,8 +99,24 @@ textarea {
   padding-left: 1.2rem;
 }
 
+.effect-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.output-box {
+  min-height: 8.5rem;
+}
+
 .hint p {
   margin: 0.4rem 0;
+}
+
+code {
+  background: #0c1226;
+  border: 1px solid #3a4877;
+  border-radius: 4px;
+  padding: 0.1rem 0.3rem;
 }
 
 a {

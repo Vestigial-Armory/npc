@@ -1,100 +1,64 @@
 # NPC Action Generator (Static + Mobile-first)
 
-This app runs fully in the browser and is designed for static hosting (GitHub Pages, SiteGround static deployment, or any CDN).
+This app runs fully in-browser and is designed for static hosting (GitHub Pages, SiteGround static deployment, or any CDN).
 
-It supports:
+## Current behavior
 
-- CSV upload for NPC trait tables
-- Weighted trait rolls
-- Situation prompt input
-- In-browser LLM action generation using WebLLM + WebGPU
-- Automatic rules-only fallback when WebGPU/model loading is unavailable
-- Built-in sample traits loaded at startup (no upload required for quick testing)
+- Loads NPC character sheets from CSV using section and field markers.
+- No trait rolling in UI.
+- Shows only the first 5 identifying traits as a preview.
+- Supports prompt tags:
+  - `#Name#` for connection references
+  - `*item*` for inventory references
+- Generates a narrative response plus a list of effects.
+- Applies effects back into the sheet and logs an event in `History` with importance and effect summary.
+- Uses WebLLM when compatible.
+- Uses iOS-lite local model path when iOS low-GPU limits block WebLLM.
+- Falls back to deterministic heuristic output if model generation fails.
 
-## CSV format
+## Character sheet CSV format
 
-Use these columns (case-insensitive):
+- `!!Section Name` starts a section.
+- `!Field` cells define the field header row for that section.
+- All following rows are data until the next `!!Section`.
 
-- `trait` (or `category` / `attribute`)
-- `value` (or `option` / `result`)
-- `weight` (optional; defaults to `1`)
+Example template is included at:
 
-Example:
-
-trait,value,weight
-personality,curious,3
-personality,suspicious,1
-motivation,protect family,4
+- `public/npc_char_sheet.csv`
 
 ## Development
 
-Install dependencies:
-
-`npm install`
-
-Run local dev server:
-
-`npm run dev`
-
-Run lint:
-
-`npm run lint`
-
-Build static output:
-
-`npm run build`
+- Install: `npm install`
+- Dev server: `npm run dev`
+- Lint: `npm run lint`
+- Build: `npm run build`
 
 ## Deployment notes
 
 - Deploy the generated `dist/` folder to any static host.
 - For project-subpath hosting (like `https://<user>.github.io/<repo>/`), set `VITE_BASE_PATH` during build.
-- WebLLM requires WebGPU support; devices without WebGPU use fallback mode.
 
-## GitHub Pages setup (fixes 404 / blank page)
+## GitHub Pages setup
 
-Your app source is in `webapp/`, so Pages cannot serve it directly from repo root without a build/deploy step.
+1. In repo settings open `Settings -> Pages`.
+2. Set `Source` to `GitHub Actions`.
+3. Wait for workflow `Deploy webapp to GitHub Pages` to finish.
+4. Open: `https://vestigial-armory.github.io/npc/`
 
-1. Push this repository branch with `.github/workflows/deploy-pages.yml`.
-2. In GitHub repo settings, open `Settings -> Pages`.
-3. Under Build and deployment, set `Source` to `GitHub Actions`.
-4. Let the `Deploy webapp to GitHub Pages` workflow finish.
-5. Open: `https://vestigial-armory.github.io/npc/`
+## Mobile testing
 
-Notes:
+### iPad
 
-- `404` at `/npc/` happens when no built `index.html` is deployed.
-- Blank page at `/webapp` happens because raw Vite source (`src/main.tsx`) is not static production output.
-- This workflow builds `webapp` and deploys `webapp/dist` with `VITE_BASE_PATH` set from your repo name (for this repo, `/npc/`) so asset URLs resolve correctly.
+- Open app URL in Safari.
+- If WebLLM is incompatible due to low GPU limits, app will show iOS-lite mode and still generate actions locally.
 
-## iPad and Android testing instructions
+### Android
 
-### Quick test (no upload needed)
+- Existing WebLLM path remains unchanged.
+- If device/browser supports required WebGPU limits, standard model flow works.
 
-1. Open your deployed HTTPS URL on iPad Safari or Android Chrome.
-2. Confirm the app loads with `Loaded file: built-in sample`.
-3. Confirm traits are already rolled.
-4. Tap `Generate NPC Action`.
-5. Verify `Action output` is populated.
+## Troubleshooting
 
-This path works even without model loading because fallback mode is automatic.
-
-### Optional: test WebLLM model loading
-
-1. Tap `Load Model`.
-2. Wait for status updates.
-3. If load succeeds, generate again and confirm model path output.
-4. If load fails, fallback mode remains available and the app should still generate output.
-
-Troubleshooting:
-
-- If you see `requested maxComputeWorkgroupStorageSize exceeds limit`, your device GPU limit is below WebLLM runtime requirements.
-- On iOS only, when this low-limit condition is detected, the app switches to an iOS lite local model path for generation.
-- Android/WebLLM behavior is unchanged.
-- If iOS lite model loading fails, `Generate NPC Action` still falls back to rules-only mode.
-
-### Optional: upload your own CSV
-
-1. Download and edit `public/sample_traits.csv` format as needed.
-2. Upload your CSV in the app.
-3. Tap `Roll NPC Traits`.
-4. Generate an action to validate your custom table.
+- Error like `requested maxComputeWorkgroupStorageSize exceeds limit` means WebLLM cannot run on that device/browser limit.
+- On iOS low-GPU devices, app switches to iOS-lite local model path automatically.
+- If local model load fails, generation still falls back to deterministic narrative + effects output.

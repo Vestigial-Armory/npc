@@ -1,0 +1,33 @@
+!!Identifying Traits
+!Trait,!Value,!Emphasis,!Notes
+Name,Aria Voss,10,Primary identifier
+Trust,2,9,High mistrust in most situations
+Religious Value,8,1,Strong belief but private expression
+Courage,7,6,Brave under pressure
+Temper,4,7,Easily provoked
+Humor,6,3,Dry wit
+
+!!Goals
+!Goal,!Value,!Emphasis,!Notes
+Protect family,9,10,Top priority
+Secure trade route,7,6,Long-term objective
+
+!!Motivations
+!Motivation,!Value,!Emphasis,!Notes
+Avoid betrayal,8,9,Past trauma influence
+Gain leverage,6,7,Strategic mindset
+
+!!Connections
+!Name,!Value,!Emphasis,!Notes
+Kellan,6,8,Old ally with mixed loyalty
+Magistrate Tov,3,7,Uneasy political contact
+
+!!Inventory
+!Item,!Value,!Emphasis,!Quantity,!Notes
+blaster,7,6,1,Custom sidearm
+data slate,5,4,1,Encrypted contacts
+medkit,6,5,1,Emergency supplies
+
+!!History
+!Event,!Importance,!Effects
+Arrived in Port Meridian,4,none
