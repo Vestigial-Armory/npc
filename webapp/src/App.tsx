@@ -117,17 +117,20 @@ const coerceContent = (content: unknown): string => {
 
 const parseTaggedValues = (text: string, regex: RegExp): string[] => {
   const seen = new Set<string>();
+  const values: string[] = [];
   for (const match of text.matchAll(regex)) {
     const value = (match[1] ?? "").trim();
     if (!value) {
       continue;
     }
     const key = normalizeName(value);
-    if (!seen.has(key)) {
-      seen.add(key);
+    if (seen.has(key)) {
+      continue;
     }
+    seen.add(key);
+    values.push(value);
   }
-  return Array.from(seen.values());
+  return values;
 };
 
 const findFieldByKeywords = (
@@ -156,6 +159,20 @@ const findIdentifyingSection = (
       normalized.includes("identifying")
     );
   });
+
+const getIdentifyingFields = (section: CharacterSheetSection) => {
+  const traitField =
+    findFieldByKeywords(section.headers, ["trait"]) ?? section.headers[0];
+  const valueField =
+    findFieldByKeywords(section.headers, ["value", "rating"]) ??
+    section.headers[1];
+  const emphasisField = findFieldByKeywords(section.headers, [
+    "emphasis",
+    "weight",
+    "importance",
+  ]);
+  return { traitField, valueField, emphasisField };
+};
 
 const cloneSheet = (sheet: CharacterSheet): CharacterSheet =>
   JSON.parse(JSON.stringify(sheet)) as CharacterSheet;
@@ -282,25 +299,13 @@ const buildIdentifyingPreview = (sheet: CharacterSheet): string[] => {
     return [];
   }
 
-  const traitField =
-    findFieldByKeywords(identifyingSection.headers, [
-      "trait",
-      "name",
-      "identifier",
-      "label",
-    ]) ?? identifyingSection.headers[0];
+  const { traitField, valueField, emphasisField } =
+    getIdentifyingFields(identifyingSection);
+  const traitRows = identifyingSection.rows.filter(
+    (row) => (row[traitField] ?? "").trim() !== "",
+  );
 
-  const valueField =
-    findFieldByKeywords(identifyingSection.headers, ["value", "rating"]) ??
-    identifyingSection.headers[1];
-
-  const emphasisField = findFieldByKeywords(identifyingSection.headers, [
-    "emphasis",
-    "weight",
-    "importance",
-  ]);
-
-  return identifyingSection.rows.slice(0, 5).map((row) => {
+  return traitRows.slice(0, 5).map((row) => {
     const trait = row[traitField] || traitField;
     const value = valueField ? row[valueField] : "";
     const emphasis = emphasisField ? row[emphasisField] : "";
@@ -476,13 +481,7 @@ const buildHeuristicEffects = (
     return [];
   }
 
-  const traitField =
-    findFieldByKeywords(identifyingSection.headers, ["trait", "name"]) ??
-    identifyingSection.headers[0];
-  const emphasisField = findFieldByKeywords(identifyingSection.headers, [
-    "emphasis",
-    "importance",
-  ]);
+  const { traitField, emphasisField } = getIdentifyingFields(identifyingSection);
 
   if (!emphasisField) {
     return [];
@@ -517,15 +516,49 @@ const buildHeuristicEffects = (
 };
 
 const buildHeuristicNarrative = (
-  previewTraits: string[],
+  sheet: CharacterSheet,
+  prompt: string,
+  people: string[],
+  items: string[],
 ): GeneratedNarrativeOutput => {
-  const traitSummary =
-    previewTraits.length > 0
-      ? previewTraits.join("; ")
-      : "their core traits and motives";
+  const identifyingSection = findIdentifyingSection(sheet);
+  const cleanSituation = prompt
+    .replace(/#([^#\n]+?)#/g, "$1")
+    .replace(/\*([^*\n]+?)\*/g, "$1")
+    .trim();
+
+  let characterName = "The NPC";
+  if (identifyingSection) {
+    const { traitField, valueField } = getIdentifyingFields(identifyingSection);
+    const nameRow = identifyingSection.rows.find(
+      (row) => normalizeName(row[traitField] ?? "") === "name",
+    );
+    const fallbackRow = identifyingSection.rows[0];
+    const candidate =
+      (nameRow && valueField ? nameRow[valueField] : "") ||
+      (fallbackRow && valueField ? fallbackRow[valueField] : "") ||
+      (fallbackRow ? fallbackRow[traitField] : "");
+    if (candidate && candidate.trim()) {
+      characterName = candidate.trim();
+    }
+  }
+
+  const lower = normalizeName(cleanSituation);
+  const tensionLine =
+    lower.includes("threat") || lower.includes("attack") || lower.includes("destroy")
+      ? `${characterName} takes immediate control of the scene, hardens their tone, and blocks any move that escalates the threat.`
+      : `${characterName} reads the room quickly, sets terms, and moves first to secure leverage.`;
+  const peopleLine =
+    people.length > 0
+      ? `${characterName} addresses ${people.join(", ")} directly and pressures them to commit in the moment.`
+      : `${characterName} keeps the conversation focused on outcomes and immediate consequences.`;
+  const itemLine =
+    items.length > 0
+      ? `${characterName} secures ${items.join(", ")} before anyone else can use it to change the balance.`
+      : `${characterName} safeguards nearby resources before continuing negotiations.`;
 
   return {
-    narrative: `The NPC reacts to the situation by balancing caution with initiative. Guided by ${traitSummary}, they make a clear move that addresses immediate risk, then adjust their stance for the next moment.`,
+    narrative: `${characterName} responds to ${cleanSituation}. ${tensionLine} ${peopleLine} ${itemLine}`,
     importance: 6,
     effects: [],
   };
@@ -982,7 +1015,8 @@ function App() {
       "JSON schema:",
       '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
       "Effects should be short, concrete, and relevant.",
-      "Narrative must be immersive and concise.",
+      "Narrative must be immersive, concise, and specific to the exact situation details.",
+      "When referring to any named character, use only the name (never include trait summaries).",
       "Character sheet summary:",
       sheetSummary,
     ].join("\n");
@@ -1019,9 +1053,10 @@ function App() {
     const generator = await ensureIosLiteGenerator();
     const litePrompt = [
       "Return JSON only with keys narrative, importance, effects.",
-      "Narrative is 2-4 sentences.",
+      "Narrative is 2-4 sentences, specific to the exact situation details.",
       "Importance is 0-10.",
       "Effects is an array with updates.",
+      "Use only character names when referring to characters; do not include trait summaries in narrative.",
       "Character summary:",
       sheetSummary,
       "Situation:",
@@ -1063,8 +1098,7 @@ function App() {
     const items = parseTaggedValues(situation, /\*([^*\n]+?)\*/g);
     const tagEffects = buildTagEffects(sheet, people, items);
     const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
-    const preview = buildIdentifyingPreview(sheet);
-    const heuristic = buildHeuristicNarrative(preview);
+    const heuristic = buildHeuristicNarrative(sheet, situation, people, items);
     const sheetSummary = buildSheetSummaryForPrompt(sheet);
 
     try {
@@ -1192,7 +1226,9 @@ function App() {
           Sections: <strong>{sheet?.sections.length ?? 0}</strong>
         </p>
 
-        <label className="label">Identifying traits preview (first 5)</label>
+        <label className="label">
+          Identifying traits preview (first 5 from !!Identifying Traits)
+        </label>
         {identifyingPreview.length > 0 ? (
           <ul className="trait-list">
             {identifyingPreview.map((line) => (
