@@ -85,6 +85,12 @@ This path works even without model loading because fallback mode is automatic.
 3. If load succeeds, generate again and confirm model path output.
 4. If load fails, fallback mode remains available and the app should still generate output.
 
+Troubleshooting:
+
+- If you see `requested maxComputeWorkgroupStorageSize exceeds limit`, your device GPU limit is below WebLLM runtime requirements.
+- The app now pre-checks this and disables model load when incompatible.
+- You can still use `Generate NPC Action` through rules-only fallback mode.
+
 ### Optional: upload your own CSV
 
 1. Download and edit `public/sample_traits.csv` format as needed.

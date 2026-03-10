@@ -4,6 +4,13 @@ import type { MLCEngineInterface } from "@mlc-ai/web-llm";
 import "./App.css";
 
 type CsvRow = Record<string, string>;
+type NavigatorWithGpu = Navigator & {
+  gpu?: {
+    requestAdapter: () => Promise<{
+      limits: { maxComputeWorkgroupStorageSize: number };
+    } | null>;
+  };
+};
 
 type WeightedTrait = {
   value: string;
@@ -42,6 +49,8 @@ physical,quick-footed,2`;
 
 const DEFAULT_SITUATION =
   "A rival guild demands tribute from the NPC's shop.";
+
+const REQUIRED_WORKGROUP_STORAGE_SIZE = 32768;
 
 const normalize = (value: string) => value.trim().toLowerCase();
 
@@ -112,10 +121,18 @@ function App() {
   const [isLoadingModel, setIsLoadingModel] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string>("");
+  const [isGpuCheckComplete, setIsGpuCheckComplete] = useState<boolean>(false);
+  const [webGpuCompatible, setWebGpuCompatible] = useState<boolean>(false);
+  const [gpuCheckReason, setGpuCheckReason] = useState<string>("");
+  const [adapterWorkgroupStorageLimit, setAdapterWorkgroupStorageLimit] =
+    useState<number | null>(null);
   const engineRef = useRef<MLCEngineInterface | null>(null);
 
-  const webGpuAvailable =
-    typeof navigator !== "undefined" && "gpu" in navigator;
+  const gpuApi =
+    typeof navigator !== "undefined"
+      ? (navigator as NavigatorWithGpu).gpu
+      : undefined;
+  const webGpuAvailable = Boolean(gpuApi);
 
   const traitCount = useMemo(
     () => Object.keys(traitTable).length,
@@ -195,6 +212,72 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkGpuCompatibility = async () => {
+      if (!webGpuAvailable) {
+        if (cancelled) {
+          return;
+        }
+
+        setWebGpuCompatible(false);
+        setIsGpuCheckComplete(true);
+        setGpuCheckReason("WebGPU is not available in this browser.");
+        return;
+      }
+
+      try {
+        const adapter = await gpuApi?.requestAdapter();
+        if (!adapter) {
+          if (cancelled) {
+            return;
+          }
+
+          setWebGpuCompatible(false);
+          setIsGpuCheckComplete(true);
+          setGpuCheckReason("No compatible GPU adapter was found.");
+          return;
+        }
+
+        const limit = adapter.limits.maxComputeWorkgroupStorageSize;
+        if (cancelled) {
+          return;
+        }
+
+        setAdapterWorkgroupStorageLimit(limit);
+        if (limit < REQUIRED_WORKGROUP_STORAGE_SIZE) {
+          setWebGpuCompatible(false);
+          setGpuCheckReason(
+            `Device limit ${limit} is below required ${REQUIRED_WORKGROUP_STORAGE_SIZE}.`,
+          );
+        } else {
+          setWebGpuCompatible(true);
+          setGpuCheckReason("WebGPU adapter looks compatible.");
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        const message =
+          error instanceof Error ? error.message : "GPU compatibility check failed.";
+        setWebGpuCompatible(false);
+        setGpuCheckReason(message);
+      } finally {
+        if (!cancelled) {
+          setIsGpuCheckComplete(true);
+        }
+      }
+    };
+
+    void checkGpuCompatibility();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [gpuApi, webGpuAvailable]);
+
   const handleCsvUpload = async (file: File | undefined) => {
     if (!file) {
       return;
@@ -256,6 +339,18 @@ function App() {
       return;
     }
 
+    if (!isGpuCheckComplete) {
+      setErrorText("Still checking WebGPU compatibility. Please try again.");
+      return;
+    }
+
+    if (!webGpuCompatible) {
+      setErrorText(
+        `This device cannot run the WebLLM runtime. ${gpuCheckReason} Use rules-only fallback mode.`,
+      );
+      return;
+    }
+
     setErrorText("");
     setStatusText(`Loading ${selectedModel}...`);
     setIsLoadingModel(true);
@@ -274,8 +369,13 @@ function App() {
       setModelReady(true);
       setStatusText(`Model ${selectedModel} is ready.`);
     } catch (error) {
-      const message =
+      const rawMessage =
         error instanceof Error ? error.message : "Failed to load model.";
+      const message =
+        rawMessage.includes("maxComputeWorkgroupStorageSize") &&
+        adapterWorkgroupStorageLimit !== null
+          ? `Model runtime needs at least ${REQUIRED_WORKGROUP_STORAGE_SIZE} workgroup storage, but this device reports ${adapterWorkgroupStorageLimit}. Use rules-only fallback mode.`
+          : rawMessage;
       setErrorText(message);
       setStatusText("Model load failed. You can still use fallback mode.");
       setModelReady(false);
@@ -413,14 +513,42 @@ function App() {
           className="button"
           type="button"
           onClick={handleLoadModel}
-          disabled={isLoadingModel || !webGpuAvailable}
+          disabled={
+            isLoadingModel ||
+            !webGpuAvailable ||
+            !isGpuCheckComplete ||
+            !webGpuCompatible
+          }
         >
-          {isLoadingModel ? "Loading model..." : "Load Model"}
+          {!isGpuCheckComplete
+            ? "Checking GPU..."
+            : !webGpuCompatible
+              ? "Load Model (unsupported)"
+              : isLoadingModel
+              ? "Loading model..."
+              : "Load Model"}
         </button>
         <p className="meta">
           WebGPU support:{" "}
           <strong>{webGpuAvailable ? "available" : "not detected"}</strong>
         </p>
+        <p className="meta">
+          GPU limit (workgroup storage):{" "}
+          <strong>
+            {adapterWorkgroupStorageLimit === null
+              ? "unknown"
+              : `${adapterWorkgroupStorageLimit}`}
+          </strong>
+        </p>
+        <p className="meta">
+          Runtime requirement (workgroup storage):{" "}
+          <strong>{REQUIRED_WORKGROUP_STORAGE_SIZE}</strong>
+        </p>
+        <p className="meta">
+          WebLLM compatibility:{" "}
+          <strong>{webGpuCompatible ? "compatible" : "not compatible"}</strong>
+        </p>
+        {gpuCheckReason && <p className="meta">{gpuCheckReason}</p>}
         <p className="meta">
           LLM status: <strong>{modelReady ? "ready" : "not loaded"}</strong>
         </p>

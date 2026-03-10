@@ -69,7 +69,13 @@ textarea {
 }
 
 .button:disabled {
-  opacity: 0.6;
+  opacity: 1;
+  background: #121a3a;
+  border-color: #2d3a67;
+  color: #7281b8;
+  filter: grayscale(0.65);
+  pointer-events: none;
+  cursor: not-allowed;
 }
 
 .meta {
