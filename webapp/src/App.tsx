@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import type { MLCEngineInterface } from "@mlc-ai/web-llm";
 import "./App.css";
@@ -31,6 +31,17 @@ const MODELS = [
     label: "Llama 3.2 3B q4f16 (slower on mobile)",
   },
 ];
+
+const SAMPLE_CSV = `trait,value,weight
+personality,curious,3
+personality,suspicious,1
+motivation,protect family,4
+motivation,seek profit,2
+physical,scarred veteran,1
+physical,quick-footed,2`;
+
+const DEFAULT_SITUATION =
+  "A rival guild demands tribute from the NPC's shop.";
 
 const normalize = (value: string) => value.trim().toLowerCase();
 
@@ -91,7 +102,7 @@ function App() {
   const [fileName, setFileName] = useState<string>("");
   const [traitTable, setTraitTable] = useState<TraitTable>({});
   const [rolledTraits, setRolledTraits] = useState<RolledTrait[]>([]);
-  const [situation, setSituation] = useState<string>("");
+  const [situation, setSituation] = useState<string>(DEFAULT_SITUATION);
   const [actionOutput, setActionOutput] = useState<string>("");
   const [selectedModel, setSelectedModel] = useState<string>(MODELS[0].id);
   const [statusText, setStatusText] = useState<string>(
@@ -156,6 +167,33 @@ function App() {
 
     return nextTable;
   };
+
+  const loadBuiltInSample = () => {
+    const result = Papa.parse<CsvRow>(SAMPLE_CSV, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (header) => normalize(header),
+    });
+
+    const nextTable = parseCsvToTraitTable(result.data);
+    const initialRoll = Object.entries(nextTable).map(([trait, options]) => ({
+      trait,
+      value: pickWeighted(options),
+    }));
+
+    setFileName("built-in sample");
+    setTraitTable(nextTable);
+    setRolledTraits(initialRoll);
+    setStatusText(
+      `Loaded built-in sample traits (${Object.keys(nextTable).length} groups).`,
+    );
+  };
+
+  useEffect(() => {
+    loadBuiltInSample();
+    // Load defaults on first render so users can test without uploads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleCsvUpload = async (file: File | undefined) => {
     if (!file) {
@@ -323,6 +361,13 @@ function App() {
           accept=".csv,text/csv"
           onChange={(event) => handleCsvUpload(event.target.files?.[0])}
         />
+        <button
+          className="button secondary"
+          type="button"
+          onClick={loadBuiltInSample}
+        >
+          Reload built-in sample
+        </button>
         <p className="meta">
           {fileName ? `Loaded file: ${fileName}` : "No CSV selected yet."}
         </p>

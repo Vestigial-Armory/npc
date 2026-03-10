@@ -64,6 +64,10 @@ textarea {
   background: #3150d9;
 }
 
+.button.secondary {
+  background: #1a254f;
+}
+
 .button:disabled {
   opacity: 0.6;
 }
