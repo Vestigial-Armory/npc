@@ -1,33 +1,33 @@
 !!Identifying Traits
 !Trait,!Value,!Emphasis,!Notes
-Name,Riven Calder,10,Primary identifier
-Trust,1,8,Suspicious of most people
-Religious Value,9,2,Strong private devotion
-Courage,8,7,Takes risks under pressure
-Temper,3,6,Usually controlled but reactive
-Humor,7,4,Dry sarcastic streak
+Name,Vela Dorn,10,Temporary profile seed
+Trust,6,2,Trusts quickly but moves on
+Religious Value,3,8,Ritual focused in daily life
+Courage,9,9,Pushes into danger first
+Temper,2,5,Rarely flares under stress
+Humor,4,1,Almost never jokes
 
 !!Goals
 !Goal,!Value,!Emphasis,!Notes
-Protect younger sibling,10,9,Immediate priority
-Acquire encrypted ledger,6,7,Strategic objective
+Recover lost relic,8,10,Obsessive near-term target
+Control docking permits,5,6,Political leverage plan
 
 !!Motivations
 !Motivation,!Value,!Emphasis,!Notes
-Avoid humiliation,7,8,Identity driven
-Expand influence,5,6,Long-term ambition
+Prove competence,9,7,Driven by rivalry
+Preserve autonomy,7,8,Rejects outside control
 
 !!Connections
 !Name,!Value,!Emphasis,!Notes
-Tarin,4,7,Former crewmate with debts
-Marshal Vex,6,5,Pragmatic official contact
+Lysa Renn,8,6,Trusted fixer in old district
+Quartermaster Jor,3,9,Tense but essential supplier
 
 !!Inventory
 !Item,!Value,!Emphasis,!Quantity,!Notes
-pulse knife,8,6,1,Concealable melee weapon
-smoke grenade,6,5,2,Escape tool
-credit chip,5,7,37,Liquid funds
+ion pistol,7,8,2,Primary sidearm set
+signal jammer,6,5,4,Used to break tracking locks
+sealed credstick,9,3,5,Emergency reserve stash
 
 !!History
 !Event,!Importance,!Effects
-Escaped checkpoint after bribing guard,7,Reduced trust by 1 | Increased caution emphasis by 1
+Intercepted rival courier near transit gate,8,Increased Courage by 1 | Added connection note for Lysa Renn
