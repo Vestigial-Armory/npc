@@ -606,19 +606,73 @@ const normalizeEffects = (
       delta: Number.isFinite(effect.delta ?? Number.NaN) ? effect.delta : undefined,
     }));
 
+const parseNumeric = (value: string): number | null => {
+  const numeric = Number.parseFloat(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
 const buildSheetSummaryForPrompt = (sheet: CharacterSheet): string =>
   sheet.sections
     .map((section) => {
-      const previewRows = section.rows.slice(0, 4).map((row) => {
+      const previewRows = section.rows.map((row) => {
         const pairs = section.headers
-          .slice(0, 5)
           .map((header) => `${header}: ${row[header] ?? ""}`)
+          .filter((pair) => !pair.endsWith(": "))
+          .slice(0, 8)
           .join(", ");
         return `  - ${pairs}`;
       });
       return [`Section: ${section.name}`, ...previewRows].join("\n");
     })
     .join("\n");
+
+const buildDeterministicTraitSummary = (sheet: CharacterSheet): string => {
+  const lines: string[] = [];
+
+  for (const section of sheet.sections) {
+    const labelField =
+      findFieldByKeywords(section.headers, ["trait", "motivation", "goal", "name", "item"]) ??
+      section.headers[0];
+    const valueField = findFieldByKeywords(section.headers, ["value"]);
+    const emphasisField =
+      findFieldByKeywords(section.headers, ["emphasis", "priority", "importance", "strength"]) ??
+      undefined;
+
+    for (const row of section.rows) {
+      const label = (row[labelField] ?? "").trim();
+      if (!label) {
+        continue;
+      }
+
+      const valueNumber = valueField ? parseNumeric(row[valueField] ?? "") : null;
+      const emphasisNumber = emphasisField
+        ? parseNumeric(row[emphasisField] ?? "")
+        : null;
+
+      if (valueNumber === null && emphasisNumber === null) {
+        continue;
+      }
+
+      const valueText = valueNumber === null ? "n/a" : String(clampZeroToTen(valueNumber));
+      const emphasisText =
+        emphasisNumber === null ? "n/a" : String(clampZeroToTen(emphasisNumber));
+      const direction =
+        valueNumber === null
+          ? "unspecified"
+          : valueNumber >= 5
+            ? "express trait directly"
+            : "express inverse of trait";
+      const intensity =
+        valueNumber === null ? "n/a" : String(Math.abs(clampZeroToTen(valueNumber) - 5));
+
+      lines.push(
+        `- ${label} [section=${section.name}] value=${valueText}, emphasis=${emphasisText}, direction=${direction}, intensity=${intensity}`,
+      );
+    }
+  }
+
+  return lines.join("\n");
+};
 
 const applyEffectToSheet = (sheet: CharacterSheet, effect: CharacterOutputEffect) => {
   const section = findSection(sheet, [normalizeName(effect.section)]);
@@ -1004,6 +1058,7 @@ function App() {
   const runWebLlmGeneration = async (
     promptText: string,
     sheetSummary: string,
+    deterministicTraitSummary: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!engineRef.current || !modelReady) {
       return null;
@@ -1015,15 +1070,23 @@ function App() {
       "JSON schema:",
       '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
       "Effects should be short, concrete, and relevant.",
-      "Narrative must be immersive, concise, and specific to the exact situation details.",
+      "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
       "When referring to any named character, use only the name (never include trait summaries).",
+      "Use ALL listed traits when reasoning.",
+      "Deterministic trait behavior rule:",
+      "- For trait value v in 0..10: if v >= 5, express the trait directly; if v < 5, express the inverse tendency.",
+      "- Strength of expression is deterministic from |v-5|: larger distance means stronger expression.",
+      "- Prioritize traits that are relevant to the situation and have higher emphasis.",
+      "- Resolve ties by higher |v-5|, then alphabetically by trait label.",
+      "Deterministic trait signals:",
+      deterministicTraitSummary,
       "Character sheet summary:",
       sheetSummary,
     ].join("\n");
 
     const response = await engineRef.current.chat.completions.create({
-      temperature: 0.7,
-      max_tokens: 320,
+      temperature: 0.2,
+      max_tokens: 420,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: promptText },
@@ -1045,6 +1108,7 @@ function App() {
   const runIosLiteGeneration = async (
     promptText: string,
     sheetSummary: string,
+    deterministicTraitSummary: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!iosLiteModeActive) {
       return null;
@@ -1053,10 +1117,18 @@ function App() {
     const generator = await ensureIosLiteGenerator();
     const litePrompt = [
       "Return JSON only with keys narrative, importance, effects.",
-      "Narrative is 2-4 sentences, specific to the exact situation details.",
+      "Narrative is 2-4 sentences, specific to the exact situation details (actions, objects, immediate consequences).",
       "Importance is 0-10.",
       "Effects is an array with updates.",
       "Use only character names when referring to characters; do not include trait summaries in narrative.",
+      "Use ALL listed traits when reasoning.",
+      "Deterministic trait behavior rule:",
+      "- value >= 5 means trait is expressed directly.",
+      "- value < 5 means inverse trait behavior is expressed.",
+      "- expression strength is determined by |value-5|.",
+      "- prioritize relevant traits with highest emphasis.",
+      "Deterministic trait signals:",
+      deterministicTraitSummary,
       "Character summary:",
       sheetSummary,
       "Situation:",
@@ -1100,15 +1172,24 @@ function App() {
     const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
     const heuristic = buildHeuristicNarrative(sheet, situation, people, items);
     const sheetSummary = buildSheetSummaryForPrompt(sheet);
+    const deterministicTraitSummary = buildDeterministicTraitSummary(sheet);
 
     try {
       let generated: GeneratedNarrativeOutput | null = null;
 
       if (modelReady && engineRef.current) {
-        generated = await runWebLlmGeneration(situation.trim(), sheetSummary);
+        generated = await runWebLlmGeneration(
+          situation.trim(),
+          sheetSummary,
+          deterministicTraitSummary,
+        );
       } else if (iosLiteModeActive) {
         setStatusText("Generating with iOS lite local model...");
-        generated = await runIosLiteGeneration(situation.trim(), sheetSummary);
+        generated = await runIosLiteGeneration(
+          situation.trim(),
+          sheetSummary,
+          deterministicTraitSummary,
+        );
       }
 
       const finalGenerated = generated ?? heuristic;
