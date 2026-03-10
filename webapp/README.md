@@ -6,7 +6,7 @@ This app runs fully in-browser and is designed for static hosting (GitHub Pages,
 
 - Loads NPC character sheets from CSV using section and field markers.
 - No trait rolling in UI.
-- Shows only the first 5 identifying traits as a preview.
+- Shows only the first 5 traits from the `!!Identifying Traits` section as a preview.
 - Supports prompt tags:
   - `#Name#` for connection references
   - `*item*` for inventory references
@@ -25,6 +25,7 @@ This app runs fully in-browser and is designed for static hosting (GitHub Pages,
 Example template is included at:
 
 - `public/npc_char_sheet.csv`
+- `public/npc_char_sheet_test_random.csv` (pre-filled random test sheet)
 
 ## Development
 

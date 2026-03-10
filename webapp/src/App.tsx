@@ -146,6 +146,17 @@ const findSection = (
     keywords.some((keyword) => normalizeName(section.name).includes(keyword)),
   );
 
+const findIdentifyingSection = (
+  sheet: CharacterSheet,
+): CharacterSheetSection | undefined =>
+  sheet.sections.find((section) => {
+    const normalized = normalizeName(section.name);
+    return (
+      normalized === "identifying traits" ||
+      normalized.includes("identifying")
+    );
+  });
+
 const cloneSheet = (sheet: CharacterSheet): CharacterSheet =>
   JSON.parse(JSON.stringify(sheet)) as CharacterSheet;
 
@@ -265,9 +276,7 @@ const serializeCharacterSheetCsv = (sheet: CharacterSheet): string => {
 };
 
 const buildIdentifyingPreview = (sheet: CharacterSheet): string[] => {
-  const identifyingSection =
-    findSection(sheet, ["identifying", "identity", "profile"]) ??
-    sheet.sections.find((section) => section.rows.length > 0);
+  const identifyingSection = findIdentifyingSection(sheet);
 
   if (!identifyingSection) {
     return [];
@@ -461,9 +470,7 @@ const buildHeuristicEffects = (
   const dangerKeywords = ["attack", "threat", "fight", "ambush", "betray"];
   const calmKeywords = ["gift", "help", "peace", "apology", "alliance"];
   const lowerPrompt = normalizeName(prompt);
-  const identifyingSection =
-    findSection(sheet, ["identifying", "identity", "profile"]) ??
-    sheet.sections.find((section) => section.rows.length > 0);
+  const identifyingSection = findIdentifyingSection(sheet);
 
   if (!identifyingSection || identifyingSection.rows.length === 0) {
     return [];
@@ -781,12 +788,13 @@ function App() {
 
   const loadSheetFromText = (name: string, csvText: string) => {
     const parsedSheet = parseCharacterSheetCsv(csvText);
+    const hasIdentifyingSection = Boolean(findIdentifyingSection(parsedSheet));
     setSheet(parsedSheet);
     setFileName(name);
     setGeneratedOutput(null);
     setCanApplyGeneratedChanges(false);
     setStatusText(
-      `Loaded ${name}: ${parsedSheet.sections.length} sections, ${parsedSheet.sections.reduce((sum, section) => sum + section.rows.length, 0)} rows.`,
+      `Loaded ${name}: ${parsedSheet.sections.length} sections, ${parsedSheet.sections.reduce((sum, section) => sum + section.rows.length, 0)} rows.${hasIdentifyingSection ? "" : " No !!Identifying Traits section found."}`,
     );
     setErrorText("");
   };
@@ -804,6 +812,21 @@ function App() {
         error instanceof Error
           ? error.message
           : "Could not load default template.";
+      setErrorText(message);
+    }
+  }, []);
+
+  const loadTestTemplate = useCallback(async () => {
+    try {
+      const response = await fetch("./npc_char_sheet_test_random.csv");
+      if (!response.ok) {
+        throw new Error("Test sheet file not found.");
+      }
+      const text = await response.text();
+      loadSheetFromText("npc_char_sheet_test_random.csv", text);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not load test sheet.";
       setErrorText(message);
     }
   }, []);
@@ -1155,6 +1178,9 @@ function App() {
         <button className="button secondary" type="button" onClick={loadDefaultTemplate}>
           Load default template file
         </button>
+        <button className="button secondary" type="button" onClick={loadTestTemplate}>
+          Load random test sheet
+        </button>
         <button className="button secondary" type="button" onClick={downloadUpdatedSheet} disabled={!sheet}>
           Download updated sheet
         </button>
@@ -1314,6 +1340,7 @@ function App() {
         <p>
           Prompt tags: <code>#Name#</code> for connections, <code>*item*</code> for inventory.
         </p>
+        <p>Use "Load random test sheet" for quick end-to-end testing.</p>
         <p>
           Generated output includes narrative + effects list. Apply button writes those effects
           to the sheet and appends a History event with importance and effect summary.
