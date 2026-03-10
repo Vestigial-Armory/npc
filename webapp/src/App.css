@@ -1,0 +1,126 @@
+.app {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  width: min(900px, 100%);
+  margin: 0 auto;
+}
+
+.card {
+  background: #11172c;
+  border: 1px solid #24305b;
+  border-radius: 12px;
+  padding: 1rem;
+  text-align: left;
+}
+
+h1,
+h2 {
+  margin-top: 0;
+}
+
+.subtitle {
+  margin-top: 0.25rem;
+  color: #b4bee8;
+}
+
+.label {
+  display: block;
+  margin-top: 0.75rem;
+  margin-bottom: 0.35rem;
+  font-weight: 700;
+  color: #d3dcff;
+}
+
+input[type="file"],
+select,
+textarea {
+  width: 100%;
+  border: 1px solid #3a4877;
+  border-radius: 8px;
+  background: #0c1226;
+  color: #f5f7ff;
+  padding: 0.65rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.button {
+  width: 100%;
+  margin-top: 0.75rem;
+  border: 1px solid #5166b9;
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  background: #1a2e85;
+  color: #f7f8ff;
+  font-weight: 700;
+}
+
+.button.primary {
+  background: #3150d9;
+}
+
+.button.secondary {
+  background: #1a254f;
+}
+
+.button:disabled {
+  opacity: 0.6;
+}
+
+.meta {
+  margin: 0.45rem 0 0;
+  color: #a8b5e5;
+  font-size: 0.9rem;
+}
+
+.status {
+  margin: 0.75rem 0 0;
+  color: #e2e9ff;
+}
+
+.error {
+  margin: 0.75rem 0 0;
+  color: #ffb9b9;
+}
+
+.trait-list {
+  margin: 0.75rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.hint p {
+  margin: 0.4rem 0;
+}
+
+a {
+  color: #8fb0ff;
+}
+
+a:hover {
+  color: #b7ccff;
+}
+
+pre {
+  margin: 0.5rem 0 0;
+  overflow: auto;
+  background: #0c1226;
+  border: 1px solid #3a4877;
+  border-radius: 8px;
+  padding: 0.75rem;
+  color: #ebefff;
+}
+
+@media (min-width: 860px) {
+  .app {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .card.hint {
+    grid-column: 1 / -1;
+  }
+}
