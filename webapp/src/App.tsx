@@ -72,6 +72,18 @@ type TraitDecisionProfile = {
   profileText: string;
 };
 
+type DeterministicActionPlan = {
+  characterName: string;
+  objective: string;
+  primaryBehavior: string;
+  secondaryBehavior: string;
+  firstAction: string;
+  secondAction: string;
+  consequence: string;
+  anchorTokens: string[];
+  importance: number;
+};
+
 type WebLlmPromptBundle = {
   systemPrompt: string;
   userPrompt: string;
@@ -90,6 +102,7 @@ type DebugPromptSnapshot = {
   cleanSituation: string;
   tags: string[];
   profileText: string;
+  actionPlan: string;
   personaSeed: string;
   personaPrimeSystemPrompt: string;
   personaPrimeUserPrompt: string;
@@ -1153,6 +1166,132 @@ const isPersonaLockUsable = (personaLock: string): boolean => {
   return true;
 };
 
+const getCharacterNameFromSheet = (sheet: CharacterSheet): string => {
+  const identifyingSection = findIdentifyingSection(sheet);
+  if (!identifyingSection) {
+    return "The NPC";
+  }
+  const { traitField, valueField } = getIdentifyingFields(identifyingSection);
+  const nameRow = identifyingSection.rows.find(
+    (row) => normalizeName(row[traitField] ?? "") === "name",
+  );
+  const fallbackRow = identifyingSection.rows[0];
+  const candidate =
+    (nameRow && valueField ? nameRow[valueField] : "") ||
+    (fallbackRow && valueField ? fallbackRow[valueField] : "") ||
+    (fallbackRow ? fallbackRow[traitField] : "");
+  return candidate && candidate.trim() ? candidate.trim() : "The NPC";
+};
+
+const buildDeterministicActionPlan = (
+  sheet: CharacterSheet,
+  prompt: string,
+  people: string[],
+  items: string[],
+  traitProfile: TraitDecisionProfile,
+): DeterministicActionPlan => {
+  const characterName = getCharacterNameFromSheet(sheet);
+  const cleanSituation = cleanSituationText(prompt);
+  const lower = normalizeName(cleanSituation);
+  const topTraits = traitProfile.topSignals.slice(0, 3);
+  const [primaryTrait, secondaryTrait] = topTraits;
+  const primaryBehavior = primaryTrait
+    ? inferActionCueFromSignal(primaryTrait)
+    : "focused and pragmatic behavior";
+  const secondaryBehavior = secondaryTrait
+    ? inferActionCueFromSignal(secondaryTrait)
+    : "measured follow-through";
+  const situationBits = cleanSituation
+    .split(/[.!?]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const scene = situationBits[0] ?? "the confrontation";
+  const primaryPerson = people[0] ?? "the counterpart";
+  const primaryItem = items[0] ?? "the nearest leverage point";
+
+  const hasThreat = ["threat", "attack", "ambush", "fight", "guards", "weapon"].some((term) =>
+    lower.includes(term),
+  );
+  const hasDemand = ["demand", "tribute", "payment", "extort", "negotiate", "mercy"].some(
+    (term) => lower.includes(term),
+  );
+  const hasStealth = ["sneak", "hidden", "quiet", "secret", "undetected"].some((term) =>
+    lower.includes(term),
+  );
+
+  const objective = hasThreat
+    ? `shut down the immediate threat around ${scene}`
+    : hasDemand
+      ? `regain control of the exchange around ${scene}`
+      : hasStealth
+        ? `secure an advantage before anyone notices the shift around ${scene}`
+        : `take control of the next move in ${scene}`;
+
+  const firstAction =
+    people.length > 0 && items.length > 0
+      ? `${characterName} steps between ${primaryPerson} and ${primaryItem}, then uses ${primaryBehavior} to seize initiative.`
+      : people.length > 0
+        ? `${characterName} closes on ${primaryPerson} and uses ${primaryBehavior} to set hard terms immediately.`
+        : items.length > 0
+          ? `${characterName} secures ${primaryItem} first, then uses ${primaryBehavior} to dictate pace.`
+          : `${characterName} moves first with ${primaryBehavior}, forcing the scene onto a narrower track.`;
+
+  const secondAction =
+    people.length > 0
+      ? `${characterName} presses ${primaryPerson} with ${secondaryBehavior}, demanding a concrete commitment before momentum can flip.`
+      : `${characterName} layers in ${secondaryBehavior} to lock the next decision point before others can react.`;
+
+  const consequence = hasThreat
+    ? "That sequence collapses the threat window and leaves bystanders a clear lane to act."
+    : hasDemand
+      ? "That sequence reframes the standoff on immediate terms and strips room for evasive bargaining."
+      : hasStealth
+        ? "That sequence preserves initiative while keeping intentions difficult to read."
+        : "That sequence creates immediate leverage and makes the follow-up action predictable for allies.";
+
+  const topEmphasis =
+    topTraits.length > 0
+      ? topTraits.reduce((sum, signal) => sum + (signal.emphasis ?? 5), 0) / topTraits.length
+      : 5;
+  const pressureBonus = hasThreat ? 3 : hasDemand ? 2 : 1;
+  const importance = clampZeroToTen(pressureBonus + topEmphasis * 0.6);
+
+  return {
+    characterName,
+    objective,
+    primaryBehavior,
+    secondaryBehavior,
+    firstAction,
+    secondAction,
+    consequence,
+    anchorTokens: tokenizeText(cleanSituation).slice(0, 8),
+    importance,
+  };
+};
+
+const formatActionPlan = (plan: DeterministicActionPlan): string =>
+  [
+    `Character: ${plan.characterName}`,
+    `Objective: ${plan.objective}`,
+    `Primary behavior cue: ${plan.primaryBehavior}`,
+    `Secondary behavior cue: ${plan.secondaryBehavior}`,
+    `Action 1: ${plan.firstAction}`,
+    `Action 2: ${plan.secondAction}`,
+    `Immediate consequence: ${plan.consequence}`,
+    `Anchor tokens: ${plan.anchorTokens.join(", ") || "none"}`,
+  ].join("\n");
+
+const buildActionPlanPromptAnchors = (plan: DeterministicActionPlan): string[] => [
+  "Deterministic action anchors (reflect these beats; do not copy wording verbatim):",
+  `- Objective: ${plan.objective}`,
+  `- First action beat: ${plan.firstAction}`,
+  `- Second action beat: ${plan.secondAction}`,
+  `- Immediate consequence beat: ${plan.consequence}`,
+  `- Must include at least one of these context tokens: ${
+    plan.anchorTokens.slice(0, 4).join(", ") || "none"
+  }`,
+];
+
 const buildHeuristicEffects = (
   sheet: CharacterSheet,
   prompt: string,
@@ -1201,69 +1340,16 @@ const buildHeuristicEffects = (
 };
 
 const buildHeuristicNarrative = (
-  sheet: CharacterSheet,
-  prompt: string,
-  people: string[],
-  items: string[],
-  traitProfile: TraitDecisionProfile,
+  actionPlan: DeterministicActionPlan,
 ): GeneratedNarrativeOutput => {
-  const identifyingSection = findIdentifyingSection(sheet);
-  const cleanSituation = cleanSituationText(prompt);
-
-  let characterName = "The NPC";
-  if (identifyingSection) {
-    const { traitField, valueField } = getIdentifyingFields(identifyingSection);
-    const nameRow = identifyingSection.rows.find(
-      (row) => normalizeName(row[traitField] ?? "") === "name",
-    );
-    const fallbackRow = identifyingSection.rows[0];
-    const candidate =
-      (nameRow && valueField ? nameRow[valueField] : "") ||
-      (fallbackRow && valueField ? fallbackRow[valueField] : "") ||
-      (fallbackRow ? fallbackRow[traitField] : "");
-    if (candidate && candidate.trim()) {
-      characterName = candidate.trim();
-    }
-  }
-
-  const lower = normalizeName(cleanSituation);
-  const topTraits = traitProfile.topSignals.slice(0, 3);
-  const [primaryTrait, secondaryTrait] = topTraits;
-  const primaryBehavior = primaryTrait
-    ? inferActionCueFromSignal(primaryTrait)
-    : "focused and pragmatic behavior";
-  const secondaryBehavior = secondaryTrait
-    ? inferActionCueFromSignal(secondaryTrait)
-    : "measured follow-through";
-  const situationBits = cleanSituation
-    .split(/[.!?]/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const firstBit = situationBits[0] ?? "the confrontation";
-  const tensionLine =
-    lower.includes("threat") || lower.includes("attack") || lower.includes("destroy")
-      ? `${characterName} reacts with ${primaryBehavior}, immediately reducing the threat window.`
-      : `${characterName} uses ${primaryBehavior} to steer ${firstBit} toward a controllable outcome.`;
-  const peopleLine =
-    people.length > 0
-      ? `${characterName} addresses ${people.join(", ")} directly, using ${secondaryBehavior} to force a concrete response.`
-      : `${characterName} keeps the interaction anchored to immediate outcomes through ${secondaryBehavior}.`;
-  const itemLine =
-    items.length > 0
-      ? `${characterName} takes control of ${items.join(", ")} as leverage before anyone else can alter the balance.`
-      : `${characterName} secures nearby resources before committing to the next move.`;
-  const topEmphasis =
-    topTraits.length > 0
-      ? topTraits.reduce((sum, signal) => sum + (signal.emphasis ?? 5), 0) /
-        topTraits.length
-      : 5;
-  const importance = clampZeroToTen(
-    (lower.includes("threat") || lower.includes("attack") ? 3 : 1) + topEmphasis * 0.6,
-  );
-
   return {
-    narrative: `In the unfolding scene, ${characterName} acts first. ${tensionLine} ${peopleLine} ${itemLine}`,
-    importance,
+    narrative: [
+      `${actionPlan.characterName} commits immediately to ${actionPlan.objective}.`,
+      actionPlan.firstAction,
+      actionPlan.secondAction,
+      actionPlan.consequence,
+    ].join(" "),
+    importance: actionPlan.importance,
     effects: [],
   };
 };
@@ -1313,7 +1399,9 @@ const normalizeEffects = (
 const buildWebLlmPromptBundle = (
   promptText: string,
   personaLock: string,
+  actionPlan: DeterministicActionPlan,
 ): WebLlmPromptBundle => {
+  const actionAnchors = buildActionPlanPromptAnchors(actionPlan);
   const systemPrompt = [
     "Return strict JSON only.",
     "JSON schema:",
@@ -1323,6 +1411,7 @@ const buildWebLlmPromptBundle = (
     "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
     "Do not use abstract filler phrases such as 'core-trait behavior', 'under pressure', or 'control the exchange'.",
     "Effects should be short, concrete, and relevant.",
+    ...actionAnchors,
   ].join("\n");
 
   const userPrompt = [
@@ -1341,7 +1430,9 @@ const buildWebLlmPromptBundle = (
 const buildIosLitePromptText = (
   promptText: string,
   personaLock: string,
+  actionPlan: DeterministicActionPlan,
 ): string => {
+  const actionAnchors = buildActionPlanPromptAnchors(actionPlan);
   return [
     "Return JSON only with keys narrative, importance, effects.",
     "Narrative is 3-5 sentences, third-person in-character story prose.",
@@ -1350,6 +1441,7 @@ const buildIosLitePromptText = (
     "Effects is an array with updates.",
     "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
     "Avoid abstract filler phrases like 'core-trait behavior', 'under pressure', or 'control the exchange'.",
+    ...actionAnchors,
     "You are the person described below:",
     personaLock || "No persona lock available.",
     "You find yourself in this situation:",
@@ -1442,7 +1534,13 @@ const extractNarrativeFromRawModelText = (rawText: string): string | null => {
   return sentences.slice(0, 5).join(" ");
 };
 
-const isNarrativeWeak = (narrative: string, cleanSituation: string): boolean => {
+const isNarrativeWeak = (
+  narrative: string,
+  cleanSituation: string,
+  actionPlan: DeterministicActionPlan,
+  people: string[],
+  items: string[],
+): boolean => {
   const lowerNarrative = normalizeName(narrative);
   const lowerSituation = normalizeName(cleanSituation);
   if (!lowerNarrative) {
@@ -1463,10 +1561,44 @@ const isNarrativeWeak = (narrative: string, cleanSituation: string): boolean => 
     return true;
   }
 
+  if (
+    people.length > 0 &&
+    !people.some((person) => lowerNarrative.includes(normalizeName(person)))
+  ) {
+    return true;
+  }
+
+  if (
+    items.length > 0 &&
+    !items.some((item) => lowerNarrative.includes(normalizeName(item)))
+  ) {
+    return true;
+  }
+
+  const overlapWithPlanTokens = actionPlan.anchorTokens.filter((token) =>
+    lowerNarrative.includes(token),
+  ).length;
+  if (actionPlan.anchorTokens.length > 0 && overlapWithPlanTokens === 0) {
+    return true;
+  }
+
   const actionHits = NARRATIVE_ACTION_VERBS.filter((verb) =>
     lowerNarrative.includes(verb),
   ).length;
   if (actionHits < 2) {
+    return true;
+  }
+
+  const consequenceMarkers = [
+    "forcing",
+    "leaving",
+    "so ",
+    "therefore",
+    "which",
+    "before anyone",
+    "as a result",
+  ];
+  if (!consequenceMarkers.some((marker) => lowerNarrative.includes(marker))) {
     return true;
   }
 
@@ -2052,15 +2184,16 @@ function App() {
     const items = parseTaggedValues(situation, /\*([^*\n]+?)\*/g);
     const traitProfile = buildTraitDecisionProfile(sheet, situation, people, items);
     const personaSeed = buildPersonaSeedFromSheet(sheet, traitProfile);
-    const tagEffects = buildTagEffects(sheet, people, items);
-    const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
-    const heuristic = buildHeuristicNarrative(
+    const actionPlan = buildDeterministicActionPlan(
       sheet,
       situation,
       people,
       items,
       traitProfile,
     );
+    const tagEffects = buildTagEffects(sheet, people, items);
+    const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
+    const heuristic = buildHeuristicNarrative(actionPlan);
     const activePath: DebugPromptSnapshot["activePath"] =
       modelReady && engineRef.current
         ? "webllm"
@@ -2087,10 +2220,12 @@ function App() {
       const webLlmPromptBundle = buildWebLlmPromptBundle(
         situation.trim(),
         personaPrimeResult.personaLock,
+        actionPlan,
       );
       const iosLitePromptText = buildIosLitePromptText(
         situation.trim(),
         personaPrimeResult.personaLock,
+        actionPlan,
       );
       if (debugPromptInspectorEnabled) {
         setDebugPromptSnapshot({
@@ -2098,6 +2233,7 @@ function App() {
           cleanSituation: traitProfile.cleanSituation,
           tags: traitProfile.tags,
           profileText: traitProfile.profileText,
+          actionPlan: formatActionPlan(actionPlan),
           personaSeed,
           personaPrimeSystemPrompt: personaPrimeResult.primeSystemPrompt,
           personaPrimeUserPrompt: personaPrimeResult.primeUserPrompt,
@@ -2117,7 +2253,13 @@ function App() {
         );
         if (
           generated &&
-          isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+          isNarrativeWeak(
+            generated.narrative,
+            traitProfile.cleanSituation,
+            actionPlan,
+            people,
+            items,
+          )
         ) {
           const retryBundle: WebLlmPromptBundle = {
             systemPrompt: [
@@ -2126,6 +2268,7 @@ function App() {
               "- Use concrete physical actions and immediate consequences.",
               "- Do not echo wording from the situation prompt.",
               "- Do not use abstract filler phrasing.",
+              ...buildActionPlanPromptAnchors(actionPlan),
             ].join("\n"),
             userPrompt: webLlmPromptBundle.userPrompt,
           };
@@ -2145,7 +2288,13 @@ function App() {
         );
         if (
           generated &&
-          isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+          isNarrativeWeak(
+            generated.narrative,
+            traitProfile.cleanSituation,
+            actionPlan,
+            people,
+            items,
+          )
         ) {
           const retryPrompt = [
             iosLitePromptText,
@@ -2154,6 +2303,7 @@ function App() {
             "- Use concrete physical actions and immediate consequences.",
             "- Do not echo wording from the situation prompt.",
             "- Do not use abstract filler phrasing.",
+            ...buildActionPlanPromptAnchors(actionPlan),
           ].join("\n");
           const retried = await runIosLiteGeneration(
             retryPrompt,
@@ -2167,7 +2317,13 @@ function App() {
 
       if (
         generated &&
-        isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+        isNarrativeWeak(
+          generated.narrative,
+          traitProfile.cleanSituation,
+          actionPlan,
+          people,
+          items,
+        )
       ) {
         generated = null;
         setStatusText(
@@ -2501,6 +2657,14 @@ function App() {
               readOnly
               className="debug-output"
               value={debugPromptSnapshot?.profileText ?? ""}
+            />
+
+            <label className="label">Deterministic action plan (silent context)</label>
+            <textarea
+              rows={9}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.actionPlan ?? ""}
             />
 
             <label className="label">WebLLM system prompt sent to model</label>
