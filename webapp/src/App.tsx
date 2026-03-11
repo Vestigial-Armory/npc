@@ -1070,21 +1070,21 @@ const parsePersonaPrimeOutput = (text: string): string | null => {
       };
       const personaLock =
         typeof parsed.persona_lock === "string" ? parsed.persona_lock.trim() : "";
-      const styleRules = Array.isArray(parsed.style_rules)
-        ? parsed.style_rules
-            .map((rule) => String(rule ?? "").trim())
-            .filter((rule) => rule.length > 0)
-        : [];
       if (personaLock) {
-        return [personaLock, ...(styleRules.length > 0 ? ["Style rules:", ...styleRules.map((rule) => `- ${rule}`)] : [])].join(
-          "\n",
-        );
+        return personaLock;
       }
     } catch {
       // Fallback to raw text handling below
     }
   }
-  return cleaned || null;
+  const trimmed = cleaned
+    .replace(/style\s*rules\s*:/gi, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("-"))
+    .join(" ")
+    .trim();
+  return trimmed || null;
 };
 
 const buildFallbackPersonaLock = (personaSeed: string): string => {
@@ -1101,6 +1101,57 @@ const buildFallbackPersonaLock = (personaSeed: string): string => {
     "Their behavior should reflect motivations and goals under pressure while remaining consistent across scenes.",
     "Narrative voice stays third-person, in-character, and action-oriented.",
   ].join(" ");
+};
+
+const isPersonaLockUsable = (personaLock: string): boolean => {
+  const normalized = normalizeName(personaLock);
+  if (normalized.length < 80) {
+    return false;
+  }
+  const sentenceCount = personaLock
+    .split(/[.!?]/)
+    .map((part) => part.trim())
+    .filter(Boolean).length;
+  if (sentenceCount < 2 || sentenceCount > 8) {
+    return false;
+  }
+
+  const tokens = normalized
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+  if (tokens.length < 20) {
+    return false;
+  }
+
+  const frequency = new Map<string, number>();
+  tokens.forEach((token) => {
+    frequency.set(token, (frequency.get(token) ?? 0) + 1);
+  });
+  const maxTokenFrequency = Math.max(...frequency.values());
+  if (maxTokenFrequency / tokens.length > 0.2) {
+    return false;
+  }
+
+  const bigrams = new Map<string, number>();
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const key = `${tokens[index]} ${tokens[index + 1]}`;
+    bigrams.set(key, (bigrams.get(key) ?? 0) + 1);
+  }
+  const maxBigramFrequency = bigrams.size > 0 ? Math.max(...bigrams.values()) : 0;
+  if (maxBigramFrequency / tokens.length > 0.12) {
+    return false;
+  }
+
+  if (
+    normalized.includes("rpg npc model") ||
+    normalized.includes("sex personality") ||
+    normalized.includes("style rules")
+  ) {
+    return false;
+  }
+
+  return true;
 };
 
 const buildHeuristicEffects = (
@@ -1260,48 +1311,27 @@ const normalizeEffects = (
       delta: Number.isFinite(effect.delta ?? Number.NaN) ? effect.delta : undefined,
     }));
 
-const formatFocusTraitsForPrompt = (signals: TraitSignal[]): string =>
-  signals
-    .map((signal, index) => {
-      const valueText = signal.value === null ? "n/a" : String(signal.value);
-      const emphasisText = signal.emphasis === null ? "n/a" : String(signal.emphasis);
-      return `${index + 1}. ${signal.label} | behavior=${describeTraitBehavior(signal)} | value=${valueText}, emphasis=${emphasisText}, priority=${signal.priority.toFixed(2)}`;
-    })
-    .join("\n");
-
 const buildWebLlmPromptBundle = (
   promptText: string,
-  traitProfile: TraitDecisionProfile,
   personaLock: string,
 ): WebLlmPromptBundle => {
-  const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
   const systemPrompt = [
-    "You are an NPC action engine.",
     "Return strict JSON only.",
     "JSON schema:",
     '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
-    "Write the narrative as in-character third-person story prose.",
-    "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
-    "When referring to any named character, use only the name (never include trait summaries).",
-    "Use only the top 5 emphasized weighted traits provided in the user message; do not invent additional trait inputs.",
-    "Do not copy the situation prompt verbatim.",
-    "Do not repeat trait names, scoring text, or repeated phrases/sentences in narrative output.",
-    "Do not output trait lists or analysis text in narrative; output story action only.",
-    "Adopt this persona lock before processing the situation, and stay consistent with it:",
-    personaLock || "No persona lock available.",
-    "Weighted top-5 trait context:",
-    focusTraitLines || "No weighted traits available.",
+    "Narrative must be third-person, in-character, and 3-5 sentences.",
+    "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
     "Effects should be short, concrete, and relevant.",
   ].join("\n");
 
   const userPrompt = [
-    "Situation:",
+    "You are the person described below:",
+    personaLock || "A composed, goal-driven operative with a stable identity under pressure.",
+    "",
+    "You find yourself in this situation:",
     promptText,
     "",
-    "Situation tags:",
-    traitProfile.tags.join(", ") || "general",
-    "",
-    "Output rule reminder: third-person in-character narrative, no prompt-copying, no trait repetition.",
+    "Describe what you do in 3-5 sentences in response to the situation",
   ].join("\n");
 
   return { systemPrompt, userPrompt };
@@ -1309,25 +1339,19 @@ const buildWebLlmPromptBundle = (
 
 const buildIosLitePromptText = (
   promptText: string,
-  traitProfile: TraitDecisionProfile,
   personaLock: string,
 ): string => {
-  const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
   return [
     "Return JSON only with keys narrative, importance, effects.",
-    "Narrative is 2-4 sentences, specific to the exact situation details (actions, objects, immediate consequences).",
-    "Narrative is third-person in-character story prose.",
+    "Narrative is 3-5 sentences, third-person in-character story prose.",
     "Importance is 0-10.",
     "Effects is an array with updates.",
-    "Use only character names when referring to characters; do not include trait summaries in narrative.",
-    "Use ONLY the top 5 emphasized weighted traits below.",
-    "Do not repeat trait names or copy the situation prompt verbatim in narrative output.",
-    "Adopt this persona lock first and remain consistent with it:",
+    "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
+    "You are the person described below:",
     personaLock || "No persona lock available.",
-    "Situation:",
+    "You find yourself in this situation:",
     promptText,
-    "Top-5 weighted traits:",
-    focusTraitLines,
+    "Describe what you do in 3-5 sentences in response to the situation",
   ].join("\n");
 };
 
@@ -1807,7 +1831,10 @@ function App() {
         ],
       });
       const raw = coerceContent(response.choices[0]?.message?.content).trim();
-      const personaLock = parsePersonaPrimeOutput(raw) ?? buildFallbackPersonaLock(personaSeed);
+      const parsedPersonaLock = parsePersonaPrimeOutput(raw) ?? "";
+      const personaLock = isPersonaLockUsable(parsedPersonaLock)
+        ? parsedPersonaLock
+        : buildFallbackPersonaLock(personaSeed);
 
       return {
         personaLock,
@@ -1877,8 +1904,10 @@ function App() {
         temperature: 0,
       });
       const raw = result[0]?.generated_text?.trim() ?? "";
-      const personaLock =
-        parsePersonaPrimeOutput(raw) ?? buildFallbackPersonaLock(personaSeed);
+      const parsedPersonaLock = parsePersonaPrimeOutput(raw) ?? "";
+      const personaLock = isPersonaLockUsable(parsedPersonaLock)
+        ? parsedPersonaLock
+        : buildFallbackPersonaLock(personaSeed);
       return {
         personaLock,
         primeSystemPrompt: primeBundle.systemPrompt,
@@ -1950,12 +1979,10 @@ function App() {
 
       const webLlmPromptBundle = buildWebLlmPromptBundle(
         situation.trim(),
-        traitProfile,
         personaPrimeResult.personaLock,
       );
       const iosLitePromptText = buildIosLitePromptText(
         situation.trim(),
-        traitProfile,
         personaPrimeResult.personaLock,
       );
       if (debugPromptInspectorEnabled) {
