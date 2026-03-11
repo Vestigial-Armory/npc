@@ -108,6 +108,26 @@ textarea {
   min-height: 8.5rem;
 }
 
+.debug-panel {
+  margin-top: 0.9rem;
+  padding: 0.65rem;
+  border: 1px solid #3a4877;
+  border-radius: 8px;
+  background: #0f1735;
+}
+
+.debug-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #c9d5ff;
+}
+
+.debug-output {
+  min-height: 7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
 .hint p {
   margin: 0.4rem 0;
 }

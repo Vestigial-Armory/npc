@@ -71,6 +71,21 @@ type TraitDecisionProfile = {
   profileText: string;
 };
 
+type WebLlmPromptBundle = {
+  systemPrompt: string;
+  userPrompt: string;
+};
+
+type DebugPromptSnapshot = {
+  activePath: "webllm" | "ios-lite" | "heuristic-fallback";
+  cleanSituation: string;
+  tags: string[];
+  profileText: string;
+  webLlmSystemPrompt: string;
+  webLlmUserPrompt: string;
+  iosLitePrompt: string;
+};
+
 const WEBLLM_MODELS = [
   {
     id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
@@ -1024,6 +1039,58 @@ const buildSheetSummaryForPrompt = (sheet: CharacterSheet): string =>
     })
     .join("\n");
 
+const buildWebLlmPromptBundle = (
+  promptText: string,
+  sheetSummary: string,
+  traitProfile: TraitDecisionProfile,
+): WebLlmPromptBundle => {
+  const systemPrompt = [
+    "You are an NPC action engine.",
+    "Return strict JSON only.",
+    "JSON schema:",
+    '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
+    "Effects should be short, concrete, and relevant.",
+    "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
+    "When referring to any named character, use only the name (never include trait summaries).",
+    "Use the supplied trait decision profile as authoritative weighting derived from the full character sheet.",
+    "The profile already applies deterministic rules and relevance weighting from all traits.",
+    "Do not reveal raw profile scores in narrative text.",
+    "Character sheet summary:",
+    sheetSummary,
+  ].join("\n");
+
+  const userPrompt = [
+    "Situation:",
+    promptText,
+    "",
+    "Trait decision profile:",
+    traitProfile.profileText,
+  ].join("\n");
+
+  return { systemPrompt, userPrompt };
+};
+
+const buildIosLitePromptText = (
+  promptText: string,
+  sheetSummary: string,
+  traitProfile: TraitDecisionProfile,
+): string =>
+  [
+    "Return JSON only with keys narrative, importance, effects.",
+    "Narrative is 2-4 sentences, specific to the exact situation details (actions, objects, immediate consequences).",
+    "Importance is 0-10.",
+    "Effects is an array with updates.",
+    "Use only character names when referring to characters; do not include trait summaries in narrative.",
+    "Use the supplied trait decision profile as authoritative weighting from all traits.",
+    "Do not reveal raw profile scores in narrative text.",
+    "Character summary:",
+    sheetSummary,
+    "Situation:",
+    promptText,
+    "Trait decision profile:",
+    traitProfile.profileText,
+  ].join("\n");
+
 const applyEffectToSheet = (sheet: CharacterSheet, effect: CharacterOutputEffect) => {
   const section = findSection(sheet, [normalizeName(effect.section)]);
 
@@ -1161,6 +1228,8 @@ function App() {
     useState<GeneratedNarrativeOutput | null>(null);
   const [canApplyGeneratedChanges, setCanApplyGeneratedChanges] =
     useState<boolean>(false);
+  const [debugPromptSnapshot, setDebugPromptSnapshot] =
+    useState<DebugPromptSnapshot | null>(null);
 
   const engineRef = useRef<MLCEngineInterface | null>(null);
   const iosLiteGeneratorRef = useRef<IosLiteGenerator | null>(null);
@@ -1170,6 +1239,15 @@ function App() {
       ? (navigator as NavigatorWithGpu).gpu
       : undefined;
   const webGpuAvailable = Boolean(gpuApi);
+  const debugPromptInspectorEnabled =
+    typeof window !== "undefined" &&
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      return (
+        params.get("debug_prompt") === "1" ||
+        params.get("debug_prompt_inspector") === "1"
+      );
+    })();
   const forceIosLiteMode =
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("force_ios_lite") === "1";
@@ -1230,6 +1308,7 @@ function App() {
     setFileName(name);
     setGeneratedOutput(null);
     setCanApplyGeneratedChanges(false);
+    setDebugPromptSnapshot(null);
     setStatusText(
       `Loaded ${name}: ${parsedSheet.sections.length} sections, ${parsedSheet.sections.reduce((sum, section) => sum + section.rows.length, 0)} rows.${hasIdentifyingSection ? "" : " No !!Identifying Traits section found."}`,
     );
@@ -1406,42 +1485,18 @@ function App() {
   };
 
   const runWebLlmGeneration = async (
-    promptText: string,
-    sheetSummary: string,
-    traitProfile: TraitDecisionProfile,
+    promptBundle: WebLlmPromptBundle,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!engineRef.current || !modelReady) {
       return null;
     }
 
-    const systemPrompt = [
-      "You are an NPC action engine.",
-      "Return strict JSON only.",
-      "JSON schema:",
-      '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
-      "Effects should be short, concrete, and relevant.",
-      "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
-      "When referring to any named character, use only the name (never include trait summaries).",
-      "Use the supplied trait decision profile as authoritative weighting derived from the full character sheet.",
-      "The profile already applies deterministic rules and relevance weighting from all traits.",
-      "Do not reveal raw profile scores in narrative text.",
-      "Character sheet summary:",
-      sheetSummary,
-    ].join("\n");
-    const userPrompt = [
-      "Situation:",
-      promptText,
-      "",
-      "Trait decision profile:",
-      traitProfile.profileText,
-    ].join("\n");
-
     const response = await engineRef.current.chat.completions.create({
       temperature: 0,
       max_tokens: 420,
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        { role: "system", content: promptBundle.systemPrompt },
+        { role: "user", content: promptBundle.userPrompt },
       ],
     });
 
@@ -1458,30 +1513,13 @@ function App() {
   };
 
   const runIosLiteGeneration = async (
-    promptText: string,
-    sheetSummary: string,
-    traitProfile: TraitDecisionProfile,
+    litePrompt: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!iosLiteModeActive) {
       return null;
     }
 
     const generator = await ensureIosLiteGenerator();
-    const litePrompt = [
-      "Return JSON only with keys narrative, importance, effects.",
-      "Narrative is 2-4 sentences, specific to the exact situation details (actions, objects, immediate consequences).",
-      "Importance is 0-10.",
-      "Effects is an array with updates.",
-      "Use only character names when referring to characters; do not include trait summaries in narrative.",
-      "Use the supplied trait decision profile as authoritative weighting from all traits.",
-      "Do not reveal raw profile scores in narrative text.",
-      "Character summary:",
-      sheetSummary,
-      "Situation:",
-      promptText,
-      "Trait decision profile:",
-      traitProfile.profileText,
-    ].join("\n");
 
     const result = await generator(litePrompt, {
       max_new_tokens: 200,
@@ -1527,23 +1565,42 @@ function App() {
       traitProfile,
     );
     const sheetSummary = buildSheetSummaryForPrompt(sheet);
+    const webLlmPromptBundle = buildWebLlmPromptBundle(
+      situation.trim(),
+      sheetSummary,
+      traitProfile,
+    );
+    const iosLitePromptText = buildIosLitePromptText(
+      situation.trim(),
+      sheetSummary,
+      traitProfile,
+    );
+    const activePath: DebugPromptSnapshot["activePath"] =
+      modelReady && engineRef.current
+        ? "webllm"
+        : iosLiteModeActive
+          ? "ios-lite"
+          : "heuristic-fallback";
+    if (debugPromptInspectorEnabled) {
+      setDebugPromptSnapshot({
+        activePath,
+        cleanSituation: traitProfile.cleanSituation,
+        tags: traitProfile.tags,
+        profileText: traitProfile.profileText,
+        webLlmSystemPrompt: webLlmPromptBundle.systemPrompt,
+        webLlmUserPrompt: webLlmPromptBundle.userPrompt,
+        iosLitePrompt: iosLitePromptText,
+      });
+    }
 
     try {
       let generated: GeneratedNarrativeOutput | null = null;
 
       if (modelReady && engineRef.current) {
-        generated = await runWebLlmGeneration(
-          situation.trim(),
-          sheetSummary,
-          traitProfile,
-        );
+        generated = await runWebLlmGeneration(webLlmPromptBundle);
       } else if (iosLiteModeActive) {
         setStatusText("Generating with iOS lite local model...");
-        generated = await runIosLiteGeneration(
-          situation.trim(),
-          sheetSummary,
-          traitProfile,
-        );
+        generated = await runIosLiteGeneration(iosLitePromptText);
       }
 
       const finalGenerated = generated ?? heuristic;
@@ -1796,6 +1853,60 @@ function App() {
           </ul>
         ) : (
           <p className="meta">No effects listed yet.</p>
+        )}
+
+        {debugPromptInspectorEnabled && (
+          <details className="debug-panel">
+            <summary>Debug prompt inspector (?debug_prompt=1)</summary>
+            <p className="meta">
+              Active generation path:{" "}
+              <strong>{debugPromptSnapshot?.activePath ?? "not generated yet"}</strong>
+            </p>
+            <p className="meta">
+              Situation used:{" "}
+              <strong>{debugPromptSnapshot?.cleanSituation ?? "Generate once to inspect."}</strong>
+            </p>
+            <p className="meta">
+              Situation tags:{" "}
+              <strong>
+                {debugPromptSnapshot
+                  ? debugPromptSnapshot.tags.join(", ") || "general"
+                  : "Generate once to inspect."}
+              </strong>
+            </p>
+
+            <label className="label">Trait profile inspector</label>
+            <textarea
+              rows={10}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.profileText ?? ""}
+            />
+
+            <label className="label">WebLLM system prompt sent to model</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.webLlmSystemPrompt ?? ""}
+            />
+
+            <label className="label">WebLLM user prompt sent to model</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.webLlmUserPrompt ?? ""}
+            />
+
+            <label className="label">iOS-lite prompt sent to model</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.iosLitePrompt ?? ""}
+            />
+          </details>
         )}
       </section>
 
