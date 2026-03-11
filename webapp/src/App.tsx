@@ -52,6 +52,25 @@ type IosLiteGenerator = (
   },
 ) => Promise<IosLiteGeneratorOutput>;
 
+type TraitSignal = {
+  section: string;
+  label: string;
+  value: number | null;
+  emphasis: number | null;
+  direction: "direct" | "inverse" | "neutral" | "unspecified";
+  intensity: number;
+  relevance: number;
+  priority: number;
+  reasons: string[];
+};
+
+type TraitDecisionProfile = {
+  cleanSituation: string;
+  tags: string[];
+  topSignals: TraitSignal[];
+  profileText: string;
+};
+
 const WEBLLM_MODELS = [
   {
     id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
@@ -70,6 +89,122 @@ const WEBLLM_MODELS = [
 const REQUIRED_WORKGROUP_STORAGE_SIZE = 32768;
 const DEFAULT_SITUATION =
   "A rival guild demands tribute from #Lila# while reaching for *blaster* on the counter.";
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "has",
+  "he",
+  "in",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "that",
+  "the",
+  "to",
+  "was",
+  "were",
+  "will",
+  "with",
+]);
+
+const SITUATION_TAG_KEYWORDS: Array<{ tag: string; keywords: string[] }> = [
+  {
+    tag: "danger",
+    keywords: ["threat", "attack", "ambush", "fight", "kill", "raid", "hostile"],
+  },
+  {
+    tag: "social",
+    keywords: ["talk", "speak", "argue", "convince", "negotiate", "ask", "demand"],
+  },
+  {
+    tag: "stealth",
+    keywords: ["stealth", "sneak", "hidden", "quiet", "undetected", "secret"],
+  },
+  {
+    tag: "technology",
+    keywords: ["computer", "terminal", "hack", "machine", "engine", "device", "drone"],
+  },
+  {
+    tag: "authority",
+    keywords: ["order", "command", "law", "rule", "captain", "officer", "superior"],
+  },
+  {
+    tag: "resource",
+    keywords: ["supply", "cargo", "loot", "trade", "payment", "tribute", "item"],
+  },
+];
+
+const TRAIT_HINTS_BY_TAG: Record<string, string[]> = {
+  danger: [
+    "violence",
+    "anger",
+    "fear",
+    "anxiety",
+    "trauma",
+    "vitality",
+    "strength",
+    "agility",
+    "pain tolerance",
+    "personal safety",
+    "team safety",
+  ],
+  social: [
+    "trust",
+    "sociability",
+    "diplomacy",
+    "shyness",
+    "honesty",
+    "secrecy",
+    "leadership",
+    "loyalty",
+    "arrogance",
+    "confidence",
+  ],
+  stealth: [
+    "secrecy",
+    "attention span",
+    "patience",
+    "goal oriented",
+    "rule-following",
+    "anxiety",
+    "doubt",
+  ],
+  technology: [
+    "good with computers",
+    "good with machines",
+    "problem solving",
+    "intelligence",
+    "perception",
+  ],
+  authority: [
+    "leadership",
+    "rule-following",
+    "rebellious",
+    "honor",
+    "pride",
+    "loyalty",
+  ],
+  resource: [
+    "wealth",
+    "money management",
+    "indulgence",
+    "immediate gratification",
+    "organization",
+    "good with hands",
+  ],
+};
 
 const normalizeName = (value: string) => value.trim().toLowerCase();
 
@@ -468,6 +603,250 @@ const parseStructuredOutput = (
   }
 };
 
+const parseOptionalNumeric = (value: string | undefined): number | null => {
+  const numeric = Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(numeric) ? clampZeroToTen(numeric) : null;
+};
+
+const cleanSituationText = (prompt: string): string =>
+  prompt
+    .replace(/#([^#\n]+?)#/g, "$1")
+    .replace(/\*([^*\n]+?)\*/g, "$1")
+    .trim();
+
+const tokenizeText = (text: string): string[] =>
+  normalizeName(text)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !STOP_WORDS.has(token));
+
+const buildSituationTags = (
+  cleanSituation: string,
+  people: string[],
+  items: string[],
+): string[] => {
+  const lower = normalizeName(cleanSituation);
+  const tags = new Set<string>();
+
+  SITUATION_TAG_KEYWORDS.forEach(({ tag, keywords }) => {
+    if (keywords.some((keyword) => lower.includes(keyword))) {
+      tags.add(tag);
+    }
+  });
+
+  if (people.length > 0) {
+    tags.add("social");
+  }
+  if (items.length > 0) {
+    tags.add("resource");
+  }
+
+  return [...tags];
+};
+
+const extractTraitSignals = (sheet: CharacterSheet): TraitSignal[] => {
+  const signals: TraitSignal[] = [];
+
+  sheet.sections.forEach((section) => {
+    if (section.rows.length === 0 || section.headers.length === 0) {
+      return;
+    }
+
+    const labelField =
+      findFieldByKeywords(section.headers, [
+        "trait",
+        "motivation",
+        "goal",
+        "person",
+        "item",
+        "name",
+      ]) ?? section.headers[0];
+    const valueField = findFieldByKeywords(section.headers, ["value", "rating"]);
+    const emphasisField = findFieldByKeywords(section.headers, [
+      "emphasis",
+      "priority",
+      "importance",
+      "strength",
+      "weight",
+    ]);
+
+    section.rows.forEach((row) => {
+      const label = (row[labelField] ?? "").trim();
+      if (!label) {
+        return;
+      }
+
+      const value = valueField ? parseOptionalNumeric(row[valueField]) : null;
+      const emphasis = emphasisField
+        ? parseOptionalNumeric(row[emphasisField])
+        : null;
+
+      if (value === null && emphasis === null) {
+        return;
+      }
+
+      const intensity = value === null ? 2.5 : Math.abs(value - 5);
+      const direction: TraitSignal["direction"] =
+        value === null
+          ? "unspecified"
+          : value > 5
+            ? "direct"
+            : value < 5
+              ? "inverse"
+              : "neutral";
+
+      signals.push({
+        section: section.name,
+        label,
+        value,
+        emphasis,
+        direction,
+        intensity,
+        relevance: 0,
+        priority: 0,
+        reasons: [],
+      });
+    });
+  });
+
+  return signals;
+};
+
+const scoreTraitSignal = (
+  signal: TraitSignal,
+  situationTokens: Set<string>,
+  situationTags: string[],
+  people: string[],
+  items: string[],
+): TraitSignal => {
+  const reasons: string[] = [];
+  let relevance = 0;
+  const labelNormalized = normalizeName(signal.label);
+  const labelTokens = tokenizeText(signal.label);
+  const overlapTokens = labelTokens.filter((token) => situationTokens.has(token));
+
+  if (overlapTokens.length > 0) {
+    relevance += 3 + overlapTokens.length * 0.8;
+    reasons.push(`keyword overlap: ${overlapTokens.join(", ")}`);
+  }
+
+  situationTags.forEach((tag) => {
+    const hints = TRAIT_HINTS_BY_TAG[tag] ?? [];
+    if (hints.some((hint) => labelNormalized.includes(hint))) {
+      relevance += 2.4;
+      reasons.push(`matches ${tag} tag`);
+    }
+  });
+
+  if (
+    people.length > 0 &&
+    ["trust", "sociability", "diplomacy", "shyness", "honesty", "secrecy"].some(
+      (keyword) => labelNormalized.includes(keyword),
+    )
+  ) {
+    relevance += 1.6;
+    reasons.push("boosted for named people");
+  }
+
+  if (
+    items.length > 0 &&
+    ["computers", "machines", "hands", "resource", "wealth"].some((keyword) =>
+      labelNormalized.includes(keyword),
+    )
+  ) {
+    relevance += 1.3;
+    reasons.push("boosted for named items");
+  }
+
+  if (relevance === 0 && (signal.emphasis ?? 0) >= 8) {
+    relevance = 0.7;
+    reasons.push("high emphasis fallback");
+  }
+
+  const emphasisScore = signal.emphasis ?? 5;
+  const emphasisFactor = 0.55 + emphasisScore / 20;
+  const intensityFactor = 0.4 + signal.intensity / 10;
+  const priority = relevance * emphasisFactor * intensityFactor;
+
+  return {
+    ...signal,
+    relevance,
+    priority,
+    reasons,
+  };
+};
+
+const describeTraitBehavior = (signal: TraitSignal): string => {
+  const intensityWord =
+    signal.intensity >= 4
+      ? "very strongly"
+      : signal.intensity >= 2.5
+        ? "strongly"
+        : signal.intensity >= 1.2
+          ? "moderately"
+          : "slightly";
+
+  if (signal.direction === "inverse") {
+    return `${intensityWord} inverse expression of ${signal.label} (low ${signal.label})`;
+  }
+  if (signal.direction === "neutral") {
+    return `balanced expression of ${signal.label}`;
+  }
+  if (signal.direction === "unspecified") {
+    return `high motivational pressure around ${signal.label}`;
+  }
+  return `${intensityWord} direct expression of ${signal.label}`;
+};
+
+const buildTraitDecisionProfile = (
+  sheet: CharacterSheet,
+  situationPrompt: string,
+  people: string[],
+  items: string[],
+): TraitDecisionProfile => {
+  const cleanSituation = cleanSituationText(situationPrompt);
+  const situationTokens = new Set(tokenizeText(cleanSituation));
+  const tags = buildSituationTags(cleanSituation, people, items);
+  const scoredSignals = extractTraitSignals(sheet)
+    .map((signal) => scoreTraitSignal(signal, situationTokens, tags, people, items))
+    .sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      const emphasisDelta = (b.emphasis ?? 0) - (a.emphasis ?? 0);
+      if (emphasisDelta !== 0) {
+        return emphasisDelta;
+      }
+      const intensityDelta = b.intensity - a.intensity;
+      if (intensityDelta !== 0) {
+        return intensityDelta;
+      }
+      return a.label.localeCompare(b.label);
+    });
+
+  const relevant = scoredSignals.filter((signal) => signal.relevance > 0);
+  const topSignals = (relevant.length > 0 ? relevant : scoredSignals).slice(0, 10);
+  const profileLines = [
+    "Trait decision profile (silent context):",
+    `Situation tags: ${tags.length > 0 ? tags.join(", ") : "general"}.`,
+    "Ranked behavior drivers:",
+    ...topSignals.map((signal, index) => {
+      const valueText = signal.value === null ? "n/a" : String(signal.value);
+      const emphasisText = signal.emphasis === null ? "n/a" : String(signal.emphasis);
+      return `${index + 1}. ${signal.label} [${signal.section}] -> ${describeTraitBehavior(signal)} | value=${valueText}, emphasis=${emphasisText}, relevance=${signal.relevance.toFixed(2)}, priority=${signal.priority.toFixed(2)}.`;
+    }),
+    "Decision policy: prioritize highest-emphasis relevant traits; if value < 5, express the inverse tendency.",
+  ];
+
+  return {
+    cleanSituation,
+    tags,
+    topSignals,
+    profileText: profileLines.join("\n"),
+  };
+};
+
 const buildHeuristicEffects = (
   sheet: CharacterSheet,
   prompt: string,
@@ -520,12 +899,10 @@ const buildHeuristicNarrative = (
   prompt: string,
   people: string[],
   items: string[],
+  traitProfile: TraitDecisionProfile,
 ): GeneratedNarrativeOutput => {
   const identifyingSection = findIdentifyingSection(sheet);
-  const cleanSituation = prompt
-    .replace(/#([^#\n]+?)#/g, "$1")
-    .replace(/\*([^*\n]+?)\*/g, "$1")
-    .trim();
+  const cleanSituation = cleanSituationText(prompt);
 
   let characterName = "The NPC";
   if (identifyingSection) {
@@ -544,22 +921,43 @@ const buildHeuristicNarrative = (
   }
 
   const lower = normalizeName(cleanSituation);
+  const topTraits = traitProfile.topSignals.slice(0, 3);
+  const [primaryTrait, secondaryTrait] = topTraits;
+  const primaryBehavior = primaryTrait
+    ? describeTraitBehavior(primaryTrait)
+    : "focused and pragmatic behavior";
+  const secondaryBehavior = secondaryTrait
+    ? describeTraitBehavior(secondaryTrait)
+    : "measured follow-through";
+  const situationBits = cleanSituation
+    .split(/[.!?]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const firstBit = situationBits[0] ?? cleanSituation;
   const tensionLine =
     lower.includes("threat") || lower.includes("attack") || lower.includes("destroy")
-      ? `${characterName} takes immediate control of the scene, hardens their tone, and blocks any move that escalates the threat.`
-      : `${characterName} reads the room quickly, sets terms, and moves first to secure leverage.`;
+      ? `${characterName} reacts with ${primaryBehavior}, immediately reducing the threat window.`
+      : `${characterName} leans on ${primaryBehavior} to control the exchange around "${firstBit}".`;
   const peopleLine =
     people.length > 0
-      ? `${characterName} addresses ${people.join(", ")} directly and pressures them to commit in the moment.`
-      : `${characterName} keeps the conversation focused on outcomes and immediate consequences.`;
+      ? `${characterName} addresses ${people.join(", ")} directly, using ${secondaryBehavior} to force a concrete response.`
+      : `${characterName} keeps the interaction anchored to immediate outcomes through ${secondaryBehavior}.`;
   const itemLine =
     items.length > 0
-      ? `${characterName} secures ${items.join(", ")} before anyone else can use it to change the balance.`
-      : `${characterName} safeguards nearby resources before continuing negotiations.`;
+      ? `${characterName} takes control of ${items.join(", ")} as leverage before anyone else can alter the balance.`
+      : `${characterName} secures nearby resources before committing to the next move.`;
+  const topEmphasis =
+    topTraits.length > 0
+      ? topTraits.reduce((sum, signal) => sum + (signal.emphasis ?? 5), 0) /
+        topTraits.length
+      : 5;
+  const importance = clampZeroToTen(
+    (lower.includes("threat") || lower.includes("attack") ? 3 : 1) + topEmphasis * 0.6,
+  );
 
   return {
     narrative: `${characterName} responds to ${cleanSituation}. ${tensionLine} ${peopleLine} ${itemLine}`,
-    importance: 6,
+    importance,
     effects: [],
   };
 };
@@ -606,73 +1004,25 @@ const normalizeEffects = (
       delta: Number.isFinite(effect.delta ?? Number.NaN) ? effect.delta : undefined,
     }));
 
-const parseNumeric = (value: string): number | null => {
-  const numeric = Number.parseFloat(value);
-  return Number.isFinite(numeric) ? numeric : null;
-};
-
 const buildSheetSummaryForPrompt = (sheet: CharacterSheet): string =>
   sheet.sections
     .map((section) => {
-      const previewRows = section.rows.map((row) => {
+      const previewRows = section.rows.slice(0, 3).map((row) => {
         const pairs = section.headers
           .map((header) => `${header}: ${row[header] ?? ""}`)
           .filter((pair) => !pair.endsWith(": "))
-          .slice(0, 8)
+          .slice(0, 6)
           .join(", ");
         return `  - ${pairs}`;
       });
-      return [`Section: ${section.name}`, ...previewRows].join("\n");
+      const hiddenCount = Math.max(0, section.rows.length - 3);
+      const countLine =
+        hiddenCount > 0 ? `  - ... (${hiddenCount} additional rows)` : "";
+      return [`Section: ${section.name}`, ...previewRows, countLine]
+        .filter(Boolean)
+        .join("\n");
     })
     .join("\n");
-
-const buildDeterministicTraitSummary = (sheet: CharacterSheet): string => {
-  const lines: string[] = [];
-
-  for (const section of sheet.sections) {
-    const labelField =
-      findFieldByKeywords(section.headers, ["trait", "motivation", "goal", "name", "item"]) ??
-      section.headers[0];
-    const valueField = findFieldByKeywords(section.headers, ["value"]);
-    const emphasisField =
-      findFieldByKeywords(section.headers, ["emphasis", "priority", "importance", "strength"]) ??
-      undefined;
-
-    for (const row of section.rows) {
-      const label = (row[labelField] ?? "").trim();
-      if (!label) {
-        continue;
-      }
-
-      const valueNumber = valueField ? parseNumeric(row[valueField] ?? "") : null;
-      const emphasisNumber = emphasisField
-        ? parseNumeric(row[emphasisField] ?? "")
-        : null;
-
-      if (valueNumber === null && emphasisNumber === null) {
-        continue;
-      }
-
-      const valueText = valueNumber === null ? "n/a" : String(clampZeroToTen(valueNumber));
-      const emphasisText =
-        emphasisNumber === null ? "n/a" : String(clampZeroToTen(emphasisNumber));
-      const direction =
-        valueNumber === null
-          ? "unspecified"
-          : valueNumber >= 5
-            ? "express trait directly"
-            : "express inverse of trait";
-      const intensity =
-        valueNumber === null ? "n/a" : String(Math.abs(clampZeroToTen(valueNumber) - 5));
-
-      lines.push(
-        `- ${label} [section=${section.name}] value=${valueText}, emphasis=${emphasisText}, direction=${direction}, intensity=${intensity}`,
-      );
-    }
-  }
-
-  return lines.join("\n");
-};
 
 const applyEffectToSheet = (sheet: CharacterSheet, effect: CharacterOutputEffect) => {
   const section = findSection(sheet, [normalizeName(effect.section)]);
@@ -1058,7 +1408,7 @@ function App() {
   const runWebLlmGeneration = async (
     promptText: string,
     sheetSummary: string,
-    deterministicTraitSummary: string,
+    traitProfile: TraitDecisionProfile,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!engineRef.current || !modelReady) {
       return null;
@@ -1072,16 +1422,18 @@ function App() {
       "Effects should be short, concrete, and relevant.",
       "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
       "When referring to any named character, use only the name (never include trait summaries).",
-      "Use ALL listed traits when reasoning.",
-      "Deterministic trait behavior rule:",
-      "- For trait value v in 0..10: if v >= 5, express the trait directly; if v < 5, express the inverse tendency.",
-      "- Strength of expression is deterministic from |v-5|: larger distance means stronger expression.",
-      "- Prioritize traits that are relevant to the situation and have higher emphasis.",
-      "- Resolve ties by higher |v-5|, then alphabetically by trait label.",
-      "Deterministic trait signals:",
-      deterministicTraitSummary,
+      "Use the supplied trait decision profile as authoritative weighting derived from the full character sheet.",
+      "The profile already applies deterministic rules and relevance weighting from all traits.",
+      "Do not reveal raw profile scores in narrative text.",
       "Character sheet summary:",
       sheetSummary,
+    ].join("\n");
+    const userPrompt = [
+      "Situation:",
+      promptText,
+      "",
+      "Trait decision profile:",
+      traitProfile.profileText,
     ].join("\n");
 
     const response = await engineRef.current.chat.completions.create({
@@ -1089,7 +1441,7 @@ function App() {
       max_tokens: 420,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: promptText },
+        { role: "user", content: userPrompt },
       ],
     });
 
@@ -1108,7 +1460,7 @@ function App() {
   const runIosLiteGeneration = async (
     promptText: string,
     sheetSummary: string,
-    deterministicTraitSummary: string,
+    traitProfile: TraitDecisionProfile,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!iosLiteModeActive) {
       return null;
@@ -1121,18 +1473,14 @@ function App() {
       "Importance is 0-10.",
       "Effects is an array with updates.",
       "Use only character names when referring to characters; do not include trait summaries in narrative.",
-      "Use ALL listed traits when reasoning.",
-      "Deterministic trait behavior rule:",
-      "- value >= 5 means trait is expressed directly.",
-      "- value < 5 means inverse trait behavior is expressed.",
-      "- expression strength is determined by |value-5|.",
-      "- prioritize relevant traits with highest emphasis.",
-      "Deterministic trait signals:",
-      deterministicTraitSummary,
+      "Use the supplied trait decision profile as authoritative weighting from all traits.",
+      "Do not reveal raw profile scores in narrative text.",
       "Character summary:",
       sheetSummary,
       "Situation:",
       promptText,
+      "Trait decision profile:",
+      traitProfile.profileText,
     ].join("\n");
 
     const result = await generator(litePrompt, {
@@ -1168,11 +1516,17 @@ function App() {
 
     const people = parseTaggedValues(situation, /#([^#\n]+?)#/g);
     const items = parseTaggedValues(situation, /\*([^*\n]+?)\*/g);
+    const traitProfile = buildTraitDecisionProfile(sheet, situation, people, items);
     const tagEffects = buildTagEffects(sheet, people, items);
     const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
-    const heuristic = buildHeuristicNarrative(sheet, situation, people, items);
+    const heuristic = buildHeuristicNarrative(
+      sheet,
+      situation,
+      people,
+      items,
+      traitProfile,
+    );
     const sheetSummary = buildSheetSummaryForPrompt(sheet);
-    const deterministicTraitSummary = buildDeterministicTraitSummary(sheet);
 
     try {
       let generated: GeneratedNarrativeOutput | null = null;
@@ -1181,14 +1535,14 @@ function App() {
         generated = await runWebLlmGeneration(
           situation.trim(),
           sheetSummary,
-          deterministicTraitSummary,
+          traitProfile,
         );
       } else if (iosLiteModeActive) {
         setStatusText("Generating with iOS lite local model...");
         generated = await runIosLiteGeneration(
           situation.trim(),
           sheetSummary,
-          deterministicTraitSummary,
+          traitProfile,
         );
       }
 
