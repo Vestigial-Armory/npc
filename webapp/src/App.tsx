@@ -68,6 +68,7 @@ type TraitDecisionProfile = {
   cleanSituation: string;
   tags: string[];
   topSignals: TraitSignal[];
+  focusSignals: TraitSignal[];
   profileText: string;
 };
 
@@ -842,9 +843,30 @@ const buildTraitDecisionProfile = (
 
   const relevant = scoredSignals.filter((signal) => signal.relevance > 0);
   const topSignals = (relevant.length > 0 ? relevant : scoredSignals).slice(0, 10);
+  const focusSignals = [...(relevant.length > 0 ? relevant : scoredSignals)]
+    .sort((a, b) => {
+      const emphasisDelta = (b.emphasis ?? 5) - (a.emphasis ?? 5);
+      if (emphasisDelta !== 0) {
+        return emphasisDelta;
+      }
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      if (b.intensity !== a.intensity) {
+        return b.intensity - a.intensity;
+      }
+      return a.label.localeCompare(b.label);
+    })
+    .slice(0, 5);
   const profileLines = [
     "Trait decision profile (silent context):",
     `Situation tags: ${tags.length > 0 ? tags.join(", ") : "general"}.`,
+    "Top 5 emphasized weighted traits for LLM context:",
+    ...focusSignals.map((signal, index) => {
+      const valueText = signal.value === null ? "n/a" : String(signal.value);
+      const emphasisText = signal.emphasis === null ? "n/a" : String(signal.emphasis);
+      return `${index + 1}. ${signal.label} -> ${describeTraitBehavior(signal)} | value=${valueText}, emphasis=${emphasisText}, priority=${signal.priority.toFixed(2)}.`;
+    }),
     "Ranked behavior drivers:",
     ...topSignals.map((signal, index) => {
       const valueText = signal.value === null ? "n/a" : String(signal.value);
@@ -858,6 +880,7 @@ const buildTraitDecisionProfile = (
     cleanSituation,
     tags,
     topSignals,
+    focusSignals,
     profileText: profileLines.join("\n"),
   };
 };
@@ -1019,52 +1042,45 @@ const normalizeEffects = (
       delta: Number.isFinite(effect.delta ?? Number.NaN) ? effect.delta : undefined,
     }));
 
-const buildSheetSummaryForPrompt = (sheet: CharacterSheet): string =>
-  sheet.sections
-    .map((section) => {
-      const previewRows = section.rows.slice(0, 3).map((row) => {
-        const pairs = section.headers
-          .map((header) => `${header}: ${row[header] ?? ""}`)
-          .filter((pair) => !pair.endsWith(": "))
-          .slice(0, 6)
-          .join(", ");
-        return `  - ${pairs}`;
-      });
-      const hiddenCount = Math.max(0, section.rows.length - 3);
-      const countLine =
-        hiddenCount > 0 ? `  - ... (${hiddenCount} additional rows)` : "";
-      return [`Section: ${section.name}`, ...previewRows, countLine]
-        .filter(Boolean)
-        .join("\n");
+const formatFocusTraitsForPrompt = (signals: TraitSignal[]): string =>
+  signals
+    .map((signal, index) => {
+      const valueText = signal.value === null ? "n/a" : String(signal.value);
+      const emphasisText = signal.emphasis === null ? "n/a" : String(signal.emphasis);
+      return `${index + 1}. ${signal.label} | behavior=${describeTraitBehavior(signal)} | value=${valueText}, emphasis=${emphasisText}, priority=${signal.priority.toFixed(2)}`;
     })
     .join("\n");
 
 const buildWebLlmPromptBundle = (
   promptText: string,
-  sheetSummary: string,
   traitProfile: TraitDecisionProfile,
 ): WebLlmPromptBundle => {
+  const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
   const systemPrompt = [
     "You are an NPC action engine.",
     "Return strict JSON only.",
     "JSON schema:",
     '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
-    "Effects should be short, concrete, and relevant.",
+    "Write the narrative as in-character third-person story prose.",
     "Narrative must be immersive, concise, and specific to the exact situation details (who did what, with which object, and immediate consequence).",
     "When referring to any named character, use only the name (never include trait summaries).",
-    "Use the supplied trait decision profile as authoritative weighting derived from the full character sheet.",
-    "The profile already applies deterministic rules and relevance weighting from all traits.",
-    "Do not reveal raw profile scores in narrative text.",
-    "Character sheet summary:",
-    sheetSummary,
+    "Use only the top 5 emphasized weighted traits provided in the user message; do not invent additional trait inputs.",
+    "Do not copy the situation prompt verbatim.",
+    "Do not repeat trait names, scoring text, or repeated phrases/sentences in narrative output.",
+    "Do not output trait lists or analysis text in narrative; output story action only.",
+    "Weighted top-5 trait context:",
+    focusTraitLines || "No weighted traits available.",
+    "Effects should be short, concrete, and relevant.",
   ].join("\n");
 
   const userPrompt = [
     "Situation:",
     promptText,
     "",
-    "Trait decision profile:",
-    traitProfile.profileText,
+    "Situation tags:",
+    traitProfile.tags.join(", ") || "general",
+    "",
+    "Output rule reminder: third-person in-character narrative, no prompt-copying, no trait repetition.",
   ].join("\n");
 
   return { systemPrompt, userPrompt };
@@ -1072,24 +1088,55 @@ const buildWebLlmPromptBundle = (
 
 const buildIosLitePromptText = (
   promptText: string,
-  sheetSummary: string,
   traitProfile: TraitDecisionProfile,
-): string =>
-  [
+): string => {
+  const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
+  return [
     "Return JSON only with keys narrative, importance, effects.",
     "Narrative is 2-4 sentences, specific to the exact situation details (actions, objects, immediate consequences).",
+    "Narrative is third-person in-character story prose.",
     "Importance is 0-10.",
     "Effects is an array with updates.",
     "Use only character names when referring to characters; do not include trait summaries in narrative.",
-    "Use the supplied trait decision profile as authoritative weighting from all traits.",
-    "Do not reveal raw profile scores in narrative text.",
-    "Character summary:",
-    sheetSummary,
+    "Use ONLY the top 5 emphasized weighted traits below.",
+    "Do not repeat trait names or copy the situation prompt verbatim in narrative output.",
     "Situation:",
     promptText,
-    "Trait decision profile:",
-    traitProfile.profileText,
+    "Top-5 weighted traits:",
+    focusTraitLines,
   ].join("\n");
+};
+
+const enforceNarrativeStyle = (narrative: string, cleanSituation: string): string => {
+  const sentences = narrative
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const deduped = sentences.filter((sentence) => {
+    const normalized = normalizeName(sentence);
+    if (seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+  let cleaned = deduped.join(" ");
+
+  if (cleanSituation && cleaned.includes(cleanSituation)) {
+    cleaned = cleaned.replace(cleanSituation, "the situation");
+  }
+
+  cleaned = cleaned
+    .replace(/\btrait decision profile\b/gi, "")
+    .replace(/\bvalue\s*=\s*\d+(\.\d+)?\b/gi, "")
+    .replace(/\bemphasis\s*=\s*\d+(\.\d+)?\b/gi, "")
+    .replace(/\bpriority\s*=\s*\d+(\.\d+)?\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return cleaned || narrative;
+};
 
 const applyEffectToSheet = (sheet: CharacterSheet, effect: CharacterOutputEffect) => {
   const section = findSection(sheet, [normalizeName(effect.section)]);
@@ -1564,17 +1611,8 @@ function App() {
       items,
       traitProfile,
     );
-    const sheetSummary = buildSheetSummaryForPrompt(sheet);
-    const webLlmPromptBundle = buildWebLlmPromptBundle(
-      situation.trim(),
-      sheetSummary,
-      traitProfile,
-    );
-    const iosLitePromptText = buildIosLitePromptText(
-      situation.trim(),
-      sheetSummary,
-      traitProfile,
-    );
+    const webLlmPromptBundle = buildWebLlmPromptBundle(situation.trim(), traitProfile);
+    const iosLitePromptText = buildIosLitePromptText(situation.trim(), traitProfile);
     const activePath: DebugPromptSnapshot["activePath"] =
       modelReady && engineRef.current
         ? "webllm"
@@ -1604,6 +1642,10 @@ function App() {
       }
 
       const finalGenerated = generated ?? heuristic;
+      const stylizedNarrative = enforceNarrativeStyle(
+        finalGenerated.narrative,
+        traitProfile.cleanSituation,
+      );
       const combinedEffects = [
         ...tagEffects,
         ...finalGenerated.effects,
@@ -1618,7 +1660,7 @@ function App() {
       );
 
       setGeneratedOutput({
-        narrative: finalGenerated.narrative,
+        narrative: stylizedNarrative,
         importance: finalGenerated.importance,
         effects: dedupedEffects,
       });
