@@ -847,7 +847,7 @@ const inferActionCueFromSignal = (signal: TraitSignal): string => {
   if (label.includes("goal") || label.includes("organization") || label.includes("leadership")) {
     return inverse ? "improvised reaction" : "structured command decisions";
   }
-  return inverse ? "counter-trait behavior under pressure" : "core-trait behavior under pressure";
+  return inverse ? "a contrarian tactical move" : "a decisive, practiced move";
 };
 
 const buildTraitDecisionProfile = (
@@ -1240,11 +1240,11 @@ const buildHeuristicNarrative = (
     .split(/[.!?]/)
     .map((part) => part.trim())
     .filter(Boolean);
-  const firstBit = situationBits[0] ?? cleanSituation;
+  const firstBit = situationBits[0] ?? "the confrontation";
   const tensionLine =
     lower.includes("threat") || lower.includes("attack") || lower.includes("destroy")
       ? `${characterName} reacts with ${primaryBehavior}, immediately reducing the threat window.`
-      : `${characterName} leans on ${primaryBehavior} to control the exchange around "${firstBit}".`;
+      : `${characterName} uses ${primaryBehavior} to steer ${firstBit} toward a controllable outcome.`;
   const peopleLine =
     people.length > 0
       ? `${characterName} addresses ${people.join(", ")} directly, using ${secondaryBehavior} to force a concrete response.`
@@ -1263,7 +1263,7 @@ const buildHeuristicNarrative = (
   );
 
   return {
-    narrative: `${characterName} responds to ${cleanSituation}. ${tensionLine} ${peopleLine} ${itemLine}`,
+    narrative: `In the unfolding scene, ${characterName} acts first. ${tensionLine} ${peopleLine} ${itemLine}`,
     importance,
     effects: [],
   };
@@ -1320,7 +1320,9 @@ const buildWebLlmPromptBundle = (
     "JSON schema:",
     '{"narrative":"string","importance":0-10,"effects":[{"kind":"add_row|adjust_field|set_field|remove_row|note","section":"string","matchField":"string","matchValue":"string","field":"string","delta":-3..3,"value":"string","row":{"field":"value"},"summary":"string"}]}',
     "Narrative must be third-person, in-character, and 3-5 sentences.",
+    "Narrative must contain at least two explicit character actions and one immediate consequence.",
     "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
+    "Do not use abstract filler phrases such as 'core-trait behavior', 'under pressure', or 'control the exchange'.",
     "Effects should be short, concrete, and relevant.",
   ].join("\n");
 
@@ -1344,9 +1346,11 @@ const buildIosLitePromptText = (
   return [
     "Return JSON only with keys narrative, importance, effects.",
     "Narrative is 3-5 sentences, third-person in-character story prose.",
+    "Narrative includes at least two explicit character actions and one immediate consequence.",
     "Importance is 0-10.",
     "Effects is an array with updates.",
     "Do not include trait labels, style rules, or prompt text verbatim in narrative.",
+    "Avoid abstract filler phrases like 'core-trait behavior', 'under pressure', or 'control the exchange'.",
     "You are the person described below:",
     personaLock || "No persona lock available.",
     "You find yourself in this situation:",
@@ -1384,6 +1388,90 @@ const enforceNarrativeStyle = (narrative: string, cleanSituation: string): strin
     .trim();
 
   return cleaned || narrative;
+};
+
+const NARRATIVE_ACTION_VERBS = [
+  "grabs",
+  "draws",
+  "steps",
+  "moves",
+  "signals",
+  "orders",
+  "blocks",
+  "takes",
+  "hands",
+  "shoves",
+  "aims",
+  "fires",
+  "negotiates",
+  "demands",
+  "warns",
+  "backs",
+  "pulls",
+  "pushes",
+  "points",
+  "nods",
+  "turns",
+];
+
+const extractNarrativeFromRawModelText = (rawText: string): string | null => {
+  const cleaned = rawText.replace(/```json/gi, "").replace(/```/g, "").trim();
+  if (!cleaned) {
+    return null;
+  }
+
+  const lines = cleaned
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter(
+      (line) =>
+        !/^(return json|json schema|importance|effects|you are the person described below|you find yourself|describe what you do)/i.test(
+          line,
+        ),
+    );
+
+  const candidate = lines.join(" ").replace(/\s{2,}/g, " ").trim();
+  if (candidate.length < 30) {
+    return null;
+  }
+
+  const sentences = candidate
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  return sentences.slice(0, 5).join(" ");
+};
+
+const isNarrativeWeak = (narrative: string, cleanSituation: string): boolean => {
+  const lowerNarrative = normalizeName(narrative);
+  const lowerSituation = normalizeName(cleanSituation);
+  if (!lowerNarrative) {
+    return true;
+  }
+
+  const bannedPhrases = [
+    "core-trait behavior",
+    "under pressure",
+    "control the exchange",
+    "trait decision profile",
+  ];
+  if (bannedPhrases.some((phrase) => lowerNarrative.includes(phrase))) {
+    return true;
+  }
+
+  if (lowerSituation.length > 20 && lowerNarrative.includes(lowerSituation)) {
+    return true;
+  }
+
+  const actionHits = NARRATIVE_ACTION_VERBS.filter((verb) =>
+    lowerNarrative.includes(verb),
+  ).length;
+  if (actionHits < 2) {
+    return true;
+  }
+
+  return false;
 };
 
 const applyEffectToSheet = (sheet: CharacterSheet, effect: CharacterOutputEffect) => {
@@ -1781,6 +1869,7 @@ function App() {
 
   const runWebLlmGeneration = async (
     promptBundle: WebLlmPromptBundle,
+    cleanSituation: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!engineRef.current || !modelReady) {
       return null;
@@ -1797,13 +1886,22 @@ function App() {
 
     const text = coerceContent(response.choices[0]?.message?.content).trim();
     const structured = parseStructuredOutput(text);
-    if (!structured) {
+    if (structured) {
+      return {
+        narrative: structured.narrative,
+        importance: structured.importance,
+        effects: normalizeEffects(structured.effects),
+      };
+    }
+
+    const narrativeFallback = extractNarrativeFromRawModelText(text);
+    if (!narrativeFallback) {
       return null;
     }
     return {
-      narrative: structured.narrative,
-      importance: structured.importance,
-      effects: normalizeEffects(structured.effects),
+      narrative: enforceNarrativeStyle(narrativeFallback, cleanSituation),
+      importance: 5,
+      effects: [],
     };
   };
 
@@ -1857,6 +1955,7 @@ function App() {
 
   const runIosLiteGeneration = async (
     litePrompt: string,
+    cleanSituation: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
     if (!iosLiteModeActive) {
       return null;
@@ -1871,13 +1970,22 @@ function App() {
     });
     const raw = result[0]?.generated_text?.trim() ?? "";
     const structured = parseStructuredOutput(raw);
-    if (!structured) {
+    if (structured) {
+      return {
+        narrative: structured.narrative,
+        importance: structured.importance,
+        effects: normalizeEffects(structured.effects),
+      };
+    }
+
+    const narrativeFallback = extractNarrativeFromRawModelText(raw);
+    if (!narrativeFallback) {
       return null;
     }
     return {
-      narrative: structured.narrative,
-      importance: structured.importance,
-      effects: normalizeEffects(structured.effects),
+      narrative: enforceNarrativeStyle(narrativeFallback, cleanSituation),
+      importance: 5,
+      effects: [],
     };
   };
 
@@ -2004,10 +2112,68 @@ function App() {
       }
 
       if (modelReady && engineRef.current) {
-        generated = await runWebLlmGeneration(webLlmPromptBundle);
+        generated = await runWebLlmGeneration(
+          webLlmPromptBundle,
+          traitProfile.cleanSituation,
+        );
+        if (
+          generated &&
+          isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+        ) {
+          const retryBundle: WebLlmPromptBundle = {
+            systemPrompt: [
+              webLlmPromptBundle.systemPrompt,
+              "Retry with stricter narrative quality:",
+              "- Use concrete physical actions and immediate consequences.",
+              "- Do not echo wording from the situation prompt.",
+              "- Do not use abstract filler phrasing.",
+            ].join("\n"),
+            userPrompt: webLlmPromptBundle.userPrompt,
+          };
+          const retried = await runWebLlmGeneration(
+            retryBundle,
+            traitProfile.cleanSituation,
+          );
+          if (retried) {
+            generated = retried;
+          }
+        }
       } else if (iosLiteModeActive) {
         setStatusText("Generating with iOS lite local model...");
-        generated = await runIosLiteGeneration(iosLitePromptText);
+        generated = await runIosLiteGeneration(
+          iosLitePromptText,
+          traitProfile.cleanSituation,
+        );
+        if (
+          generated &&
+          isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+        ) {
+          const retryPrompt = [
+            iosLitePromptText,
+            "",
+            "Retry with stricter narrative quality:",
+            "- Use concrete physical actions and immediate consequences.",
+            "- Do not echo wording from the situation prompt.",
+            "- Do not use abstract filler phrasing.",
+          ].join("\n");
+          const retried = await runIosLiteGeneration(
+            retryPrompt,
+            traitProfile.cleanSituation,
+          );
+          if (retried) {
+            generated = retried;
+          }
+        }
+      }
+
+      if (
+        generated &&
+        isNarrativeWeak(generated.narrative, traitProfile.cleanSituation)
+      ) {
+        generated = null;
+        setStatusText(
+          "Model output was too generic or echoed the prompt; using deterministic fallback narrative.",
+        );
       }
 
       const finalGenerated = generated ?? heuristic;
