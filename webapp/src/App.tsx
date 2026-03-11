@@ -1042,9 +1042,8 @@ const buildPersonaSeedFromSheet = (
 const buildPersonaPrimePromptBundle = (personaSeed: string): WebLlmPromptBundle => {
   const systemPrompt = [
     "You are a persona compiler for an RPG NPC model.",
-    "Return strict JSON only with keys persona_lock and style_rules.",
+    "Return strict JSON only with key persona_lock.",
     "persona_lock: 4-6 sentences in third-person describing stable identity, physicality, impulses, motivations, and goal tension.",
-    "style_rules: array of short constraints for narrative behavior.",
     "Do not output bullet points in persona_lock.",
     "Do not copy raw numeric values.",
   ].join("\n");
