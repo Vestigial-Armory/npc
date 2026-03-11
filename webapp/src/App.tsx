@@ -77,11 +77,25 @@ type WebLlmPromptBundle = {
   userPrompt: string;
 };
 
+type PersonaPrimeResult = {
+  personaLock: string;
+  primeSystemPrompt: string;
+  primeUserPrompt: string;
+  rawModelOutput: string;
+  source: "webllm" | "ios-lite" | "fallback";
+};
+
 type DebugPromptSnapshot = {
   activePath: "webllm" | "ios-lite" | "heuristic-fallback";
   cleanSituation: string;
   tags: string[];
   profileText: string;
+  personaSeed: string;
+  personaPrimeSystemPrompt: string;
+  personaPrimeUserPrompt: string;
+  personaLock: string;
+  personaPrimeOutput: string;
+  personaPrimeSource: "webllm" | "ios-lite" | "fallback";
   webLlmSystemPrompt: string;
   webLlmUserPrompt: string;
   iosLitePrompt: string;
@@ -815,6 +829,27 @@ const describeTraitBehavior = (signal: TraitSignal): string => {
   return `${intensityWord} direct expression of ${signal.label}`;
 };
 
+const inferActionCueFromSignal = (signal: TraitSignal): string => {
+  const label = normalizeName(signal.label);
+  const inverse = signal.direction === "inverse";
+  if (label.includes("shy") || label.includes("sociab")) {
+    return inverse ? "directly confronting others" : "careful social restraint";
+  }
+  if (label.includes("diplom") || label.includes("trust") || label.includes("honesty")) {
+    return inverse ? "hard bargaining and guarded wording" : "measured diplomacy";
+  }
+  if (label.includes("violence") || label.includes("anger") || label.includes("fear")) {
+    return inverse ? "controlled de-escalation" : "readiness for confrontation";
+  }
+  if (label.includes("secrecy") || label.includes("rule")) {
+    return inverse ? "open, blunt communication" : "tight information control";
+  }
+  if (label.includes("goal") || label.includes("organization") || label.includes("leadership")) {
+    return inverse ? "improvised reaction" : "structured command decisions";
+  }
+  return inverse ? "counter-trait behavior under pressure" : "core-trait behavior under pressure";
+};
+
 const buildTraitDecisionProfile = (
   sheet: CharacterSheet,
   situationPrompt: string,
@@ -883,6 +918,189 @@ const buildTraitDecisionProfile = (
     focusSignals,
     profileText: profileLines.join("\n"),
   };
+};
+
+const extractTopTraitsByEmphasis = (
+  section: CharacterSheetSection | undefined,
+  limit: number,
+): TraitSignal[] => {
+  if (!section || section.rows.length === 0) {
+    return [];
+  }
+
+  const labelField =
+    findFieldByKeywords(section.headers, ["trait", "motivation", "goal"]) ??
+    section.headers[0];
+  const valueField = findFieldByKeywords(section.headers, ["value", "rating"]);
+  const emphasisField = findFieldByKeywords(section.headers, [
+    "emphasis",
+    "priority",
+    "importance",
+    "strength",
+    "weight",
+  ]);
+
+  const collected = section.rows.reduce<TraitSignal[]>((accumulator, row) => {
+      const label = (row[labelField] ?? "").trim();
+      if (!label) {
+        return accumulator;
+      }
+      const value = valueField ? parseOptionalNumeric(row[valueField]) : null;
+      const emphasis = emphasisField ? parseOptionalNumeric(row[emphasisField]) : null;
+      const intensity = value === null ? 2.5 : Math.abs(value - 5);
+      const direction: TraitSignal["direction"] =
+        value === null
+          ? "unspecified"
+          : value > 5
+            ? "direct"
+            : value < 5
+              ? "inverse"
+              : "neutral";
+
+      accumulator.push({
+        section: section.name,
+        label,
+        value,
+        emphasis,
+        direction,
+        intensity,
+        relevance: 1,
+        priority: (emphasis ?? 5) * (0.4 + intensity / 10),
+        reasons: [],
+      });
+      return accumulator;
+    }, []);
+
+  return collected.sort((a, b) => {
+      const emphasisDelta = (b.emphasis ?? 5) - (a.emphasis ?? 5);
+      if (emphasisDelta !== 0) {
+        return emphasisDelta;
+      }
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      return a.label.localeCompare(b.label);
+    })
+    .slice(0, limit);
+};
+
+const buildPersonaSeedFromSheet = (
+  sheet: CharacterSheet,
+  traitProfile: TraitDecisionProfile,
+): string => {
+  const identifyingSection = findIdentifyingSection(sheet);
+  const physicalSection = findSection(sheet, ["physical"]);
+  const personalitySection = findSection(sheet, ["personality"]);
+  const motivationsSection = findSection(sheet, ["motivation"]);
+  const goalsSection = findSection(sheet, ["goal"]);
+
+  const identifyingLines: string[] = [];
+  if (identifyingSection) {
+    const { traitField, valueField } = getIdentifyingFields(identifyingSection);
+    identifyingSection.rows.slice(0, 12).forEach((row) => {
+      const label = (row[traitField] ?? "").trim();
+      const value = (valueField ? row[valueField] : "").trim();
+      if (!label || !value) {
+        return;
+      }
+      identifyingLines.push(`${label}: ${value}`);
+    });
+  }
+
+  const topPhysical = extractTopTraitsByEmphasis(physicalSection, 5);
+  const topPersonality = extractTopTraitsByEmphasis(personalitySection, 5);
+  const topMotivations = extractTopTraitsByEmphasis(motivationsSection, 4);
+  const topGoals = extractTopTraitsByEmphasis(goalsSection, 4);
+
+  const formatSignal = (signal: TraitSignal) => {
+    const valueText = signal.value === null ? "n/a" : String(signal.value);
+    const emphasisText = signal.emphasis === null ? "n/a" : String(signal.emphasis);
+    return `${signal.label} -> ${describeTraitBehavior(signal)} (value=${valueText}, emphasis=${emphasisText})`;
+  };
+
+  return [
+    "Persona seed context:",
+    "Identifying traits:",
+    ...(identifyingLines.length > 0 ? identifyingLines.map((line) => `- ${line}`) : ["- Unknown identity"]),
+    "Physical traits (weighted):",
+    ...(topPhysical.length > 0 ? topPhysical.map((signal) => `- ${formatSignal(signal)}`) : ["- none"]),
+    "Top 5 personality traits:",
+    ...(topPersonality.length > 0
+      ? topPersonality.map((signal) => `- ${formatSignal(signal)}`)
+      : ["- none"]),
+    "Motivations:",
+    ...(topMotivations.length > 0
+      ? topMotivations.map((signal) => `- ${formatSignal(signal)}`)
+      : ["- none"]),
+    "Goals:",
+    ...(topGoals.length > 0 ? topGoals.map((signal) => `- ${formatSignal(signal)}`) : ["- none"]),
+    "Situation tags likely encountered in play:",
+    `- ${traitProfile.tags.join(", ") || "general"}`,
+  ].join("\n");
+};
+
+const buildPersonaPrimePromptBundle = (personaSeed: string): WebLlmPromptBundle => {
+  const systemPrompt = [
+    "You are a persona compiler for an RPG NPC model.",
+    "Return strict JSON only with keys persona_lock and style_rules.",
+    "persona_lock: 4-6 sentences in third-person describing stable identity, physicality, impulses, motivations, and goal tension.",
+    "style_rules: array of short constraints for narrative behavior.",
+    "Do not output bullet points in persona_lock.",
+    "Do not copy raw numeric values.",
+  ].join("\n");
+  const userPrompt = [
+    "Compile persona from this sheet-derived seed.",
+    personaSeed,
+  ].join("\n\n");
+  return { systemPrompt, userPrompt };
+};
+
+const parsePersonaPrimeOutput = (text: string): string | null => {
+  const cleaned = text
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(cleaned.slice(start, end + 1)) as {
+        persona_lock?: unknown;
+        style_rules?: unknown;
+      };
+      const personaLock =
+        typeof parsed.persona_lock === "string" ? parsed.persona_lock.trim() : "";
+      const styleRules = Array.isArray(parsed.style_rules)
+        ? parsed.style_rules
+            .map((rule) => String(rule ?? "").trim())
+            .filter((rule) => rule.length > 0)
+        : [];
+      if (personaLock) {
+        return [personaLock, ...(styleRules.length > 0 ? ["Style rules:", ...styleRules.map((rule) => `- ${rule}`)] : [])].join(
+          "\n",
+        );
+      }
+    } catch {
+      // Fallback to raw text handling below
+    }
+  }
+  return cleaned || null;
+};
+
+const buildFallbackPersonaLock = (personaSeed: string): string => {
+  const lines = personaSeed.split("\n").filter(Boolean);
+  const identifying = lines
+    .filter((line) => line.startsWith("- "))
+    .slice(0, 5)
+    .map((line) => line.replace(/^- /, ""));
+  return [
+    "This character acts from a stable internal identity shaped by their background, body, and long-standing drives.",
+    identifying.length > 0
+      ? `Identity anchors: ${identifying.join("; ")}.`
+      : "Identity anchors: unknown.",
+    "Their behavior should reflect motivations and goals under pressure while remaining consistent across scenes.",
+    "Narrative voice stays third-person, in-character, and action-oriented.",
+  ].join(" ");
 };
 
 const buildHeuristicEffects = (
@@ -962,10 +1180,10 @@ const buildHeuristicNarrative = (
   const topTraits = traitProfile.topSignals.slice(0, 3);
   const [primaryTrait, secondaryTrait] = topTraits;
   const primaryBehavior = primaryTrait
-    ? describeTraitBehavior(primaryTrait)
+    ? inferActionCueFromSignal(primaryTrait)
     : "focused and pragmatic behavior";
   const secondaryBehavior = secondaryTrait
-    ? describeTraitBehavior(secondaryTrait)
+    ? inferActionCueFromSignal(secondaryTrait)
     : "measured follow-through";
   const situationBits = cleanSituation
     .split(/[.!?]/)
@@ -1054,6 +1272,7 @@ const formatFocusTraitsForPrompt = (signals: TraitSignal[]): string =>
 const buildWebLlmPromptBundle = (
   promptText: string,
   traitProfile: TraitDecisionProfile,
+  personaLock: string,
 ): WebLlmPromptBundle => {
   const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
   const systemPrompt = [
@@ -1068,6 +1287,8 @@ const buildWebLlmPromptBundle = (
     "Do not copy the situation prompt verbatim.",
     "Do not repeat trait names, scoring text, or repeated phrases/sentences in narrative output.",
     "Do not output trait lists or analysis text in narrative; output story action only.",
+    "Adopt this persona lock before processing the situation, and stay consistent with it:",
+    personaLock || "No persona lock available.",
     "Weighted top-5 trait context:",
     focusTraitLines || "No weighted traits available.",
     "Effects should be short, concrete, and relevant.",
@@ -1089,6 +1310,7 @@ const buildWebLlmPromptBundle = (
 const buildIosLitePromptText = (
   promptText: string,
   traitProfile: TraitDecisionProfile,
+  personaLock: string,
 ): string => {
   const focusTraitLines = formatFocusTraitsForPrompt(traitProfile.focusSignals);
   return [
@@ -1100,6 +1322,8 @@ const buildIosLitePromptText = (
     "Use only character names when referring to characters; do not include trait summaries in narrative.",
     "Use ONLY the top 5 emphasized weighted traits below.",
     "Do not repeat trait names or copy the situation prompt verbatim in narrative output.",
+    "Adopt this persona lock first and remain consistent with it:",
+    personaLock || "No persona lock available.",
     "Situation:",
     promptText,
     "Top-5 weighted traits:",
@@ -1559,6 +1783,51 @@ function App() {
     };
   };
 
+  const runWebLlmPersonaPriming = async (
+    personaSeed: string,
+  ): Promise<PersonaPrimeResult> => {
+    const primeBundle = buildPersonaPrimePromptBundle(personaSeed);
+    if (!engineRef.current || !modelReady) {
+      return {
+        personaLock: buildFallbackPersonaLock(personaSeed),
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: "WebLLM unavailable; using fallback persona lock.",
+        source: "fallback",
+      };
+    }
+
+    try {
+      const response = await engineRef.current.chat.completions.create({
+        temperature: 0,
+        max_tokens: 280,
+        messages: [
+          { role: "system", content: primeBundle.systemPrompt },
+          { role: "user", content: primeBundle.userPrompt },
+        ],
+      });
+      const raw = coerceContent(response.choices[0]?.message?.content).trim();
+      const personaLock = parsePersonaPrimeOutput(raw) ?? buildFallbackPersonaLock(personaSeed);
+
+      return {
+        personaLock,
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: raw,
+        source: "webllm",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "WebLLM persona priming failed.";
+      return {
+        personaLock: buildFallbackPersonaLock(personaSeed),
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: message,
+        source: "fallback",
+      };
+    }
+  };
+
   const runIosLiteGeneration = async (
     litePrompt: string,
   ): Promise<GeneratedNarrativeOutput | null> => {
@@ -1585,6 +1854,50 @@ function App() {
     };
   };
 
+  const runIosLitePersonaPriming = async (
+    personaSeed: string,
+  ): Promise<PersonaPrimeResult> => {
+    const primeBundle = buildPersonaPrimePromptBundle(personaSeed);
+    if (!iosLiteModeActive) {
+      return {
+        personaLock: buildFallbackPersonaLock(personaSeed),
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: "iOS-lite unavailable; using fallback persona lock.",
+        source: "fallback",
+      };
+    }
+
+    try {
+      const generator = await ensureIosLiteGenerator();
+      const primePrompt = [primeBundle.systemPrompt, "", primeBundle.userPrompt].join("\n");
+      const result = await generator(primePrompt, {
+        max_new_tokens: 220,
+        do_sample: false,
+        temperature: 0,
+      });
+      const raw = result[0]?.generated_text?.trim() ?? "";
+      const personaLock =
+        parsePersonaPrimeOutput(raw) ?? buildFallbackPersonaLock(personaSeed);
+      return {
+        personaLock,
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: raw,
+        source: "ios-lite",
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "iOS-lite persona priming failed.";
+      return {
+        personaLock: buildFallbackPersonaLock(personaSeed),
+        primeSystemPrompt: primeBundle.systemPrompt,
+        primeUserPrompt: primeBundle.userPrompt,
+        rawModelOutput: message,
+        source: "fallback",
+      };
+    }
+  };
+
   const handleGenerateAction = async () => {
     if (!sheet) {
       setErrorText("Load a character sheet first.");
@@ -1602,6 +1915,7 @@ function App() {
     const people = parseTaggedValues(situation, /#([^#\n]+?)#/g);
     const items = parseTaggedValues(situation, /\*([^*\n]+?)\*/g);
     const traitProfile = buildTraitDecisionProfile(sheet, situation, people, items);
+    const personaSeed = buildPersonaSeedFromSheet(sheet, traitProfile);
     const tagEffects = buildTagEffects(sheet, people, items);
     const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
     const heuristic = buildHeuristicNarrative(
@@ -1611,28 +1925,56 @@ function App() {
       items,
       traitProfile,
     );
-    const webLlmPromptBundle = buildWebLlmPromptBundle(situation.trim(), traitProfile);
-    const iosLitePromptText = buildIosLitePromptText(situation.trim(), traitProfile);
     const activePath: DebugPromptSnapshot["activePath"] =
       modelReady && engineRef.current
         ? "webllm"
         : iosLiteModeActive
           ? "ios-lite"
           : "heuristic-fallback";
-    if (debugPromptInspectorEnabled) {
-      setDebugPromptSnapshot({
-        activePath,
-        cleanSituation: traitProfile.cleanSituation,
-        tags: traitProfile.tags,
-        profileText: traitProfile.profileText,
-        webLlmSystemPrompt: webLlmPromptBundle.systemPrompt,
-        webLlmUserPrompt: webLlmPromptBundle.userPrompt,
-        iosLitePrompt: iosLitePromptText,
-      });
-    }
 
     try {
       let generated: GeneratedNarrativeOutput | null = null;
+      let personaPrimeResult: PersonaPrimeResult = {
+        personaLock: buildFallbackPersonaLock(personaSeed),
+        primeSystemPrompt: "",
+        primeUserPrompt: "",
+        rawModelOutput: "Default fallback persona lock.",
+        source: "fallback",
+      };
+
+      if (modelReady && engineRef.current) {
+        personaPrimeResult = await runWebLlmPersonaPriming(personaSeed);
+      } else if (iosLiteModeActive) {
+        personaPrimeResult = await runIosLitePersonaPriming(personaSeed);
+      }
+
+      const webLlmPromptBundle = buildWebLlmPromptBundle(
+        situation.trim(),
+        traitProfile,
+        personaPrimeResult.personaLock,
+      );
+      const iosLitePromptText = buildIosLitePromptText(
+        situation.trim(),
+        traitProfile,
+        personaPrimeResult.personaLock,
+      );
+      if (debugPromptInspectorEnabled) {
+        setDebugPromptSnapshot({
+          activePath,
+          cleanSituation: traitProfile.cleanSituation,
+          tags: traitProfile.tags,
+          profileText: traitProfile.profileText,
+          personaSeed,
+          personaPrimeSystemPrompt: personaPrimeResult.primeSystemPrompt,
+          personaPrimeUserPrompt: personaPrimeResult.primeUserPrompt,
+          personaLock: personaPrimeResult.personaLock,
+          personaPrimeOutput: personaPrimeResult.rawModelOutput,
+          personaPrimeSource: personaPrimeResult.source,
+          webLlmSystemPrompt: webLlmPromptBundle.systemPrompt,
+          webLlmUserPrompt: webLlmPromptBundle.userPrompt,
+          iosLitePrompt: iosLitePromptText,
+        });
+      }
 
       if (modelReady && engineRef.current) {
         generated = await runWebLlmGeneration(webLlmPromptBundle);
@@ -1916,6 +2258,50 @@ function App() {
                   : "Generate once to inspect."}
               </strong>
             </p>
+            <p className="meta">
+              Persona prime source:{" "}
+              <strong>{debugPromptSnapshot?.personaPrimeSource ?? "not generated yet"}</strong>
+            </p>
+
+            <label className="label">Persona seed (pre-situation)</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.personaSeed ?? ""}
+            />
+
+            <label className="label">Persona prime system prompt</label>
+            <textarea
+              rows={7}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.personaPrimeSystemPrompt ?? ""}
+            />
+
+            <label className="label">Persona prime user prompt</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.personaPrimeUserPrompt ?? ""}
+            />
+
+            <label className="label">Persona lock generated before situation</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.personaLock ?? ""}
+            />
+
+            <label className="label">Raw persona-prime model output</label>
+            <textarea
+              rows={8}
+              readOnly
+              className="debug-output"
+              value={debugPromptSnapshot?.personaPrimeOutput ?? ""}
+            />
 
             <label className="label">Trait profile inspector</label>
             <textarea
