@@ -84,6 +84,12 @@ type DeterministicActionPlan = {
   importance: number;
 };
 
+type DeterministicTraitAction = {
+  signal: TraitSignal;
+  actionWords: string[];
+  weightPct: number;
+};
+
 type WebLlmPromptBundle = {
   systemPrompt: string;
   userPrompt: string;
@@ -98,7 +104,11 @@ type PersonaPrimeResult = {
 };
 
 type DebugPromptSnapshot = {
-  activePath: "webllm" | "ios-lite" | "heuristic-fallback";
+  activePath:
+    | "webllm"
+    | "ios-lite"
+    | "heuristic-fallback"
+    | "deterministic-trait";
   cleanSituation: string;
   tags: string[];
   profileText: string;
@@ -1292,6 +1302,193 @@ const buildActionPlanPromptAnchors = (plan: DeterministicActionPlan): string[] =
   }`,
 ];
 
+const isRelevantDecisionSection = (sectionName: string): boolean => {
+  const normalized = normalizeName(sectionName);
+  if (
+    normalized.includes("identifying") ||
+    normalized.includes("connection") ||
+    normalized.includes("inventory") ||
+    normalized.includes("history")
+  ) {
+    return false;
+  }
+  return (
+    normalized.includes("trait") ||
+    normalized.includes("personality") ||
+    normalized.includes("motivation") ||
+    normalized.includes("goal") ||
+    normalized.includes("physical")
+  );
+};
+
+const buildActionWordsForSignal = (signal: TraitSignal): string[] => {
+  const label = normalizeName(signal.label);
+  const inverse = signal.direction === "inverse";
+  const strong = (signal.emphasis ?? 5) >= 8 || signal.intensity >= 3;
+  let words: string[] = [];
+
+  if (label.includes("shy") || label.includes("sociab")) {
+    words = inverse ? ["approach", "engage", "speak"] : ["observe", "hesitate", "withdraw"];
+  } else if (
+    label.includes("diplom") ||
+    label.includes("trust") ||
+    label.includes("honesty")
+  ) {
+    words = inverse ? ["probe", "withhold", "pressure"] : ["negotiate", "appeal", "cooperate"];
+  } else if (label.includes("violence") || label.includes("anger") || label.includes("fear")) {
+    words = inverse ? ["defuse", "shield", "retreat"] : ["threaten", "confront", "strike"];
+  } else if (
+    label.includes("secrecy") ||
+    label.includes("rule") ||
+    label.includes("rebell")
+  ) {
+    words = inverse ? ["disclose", "improvise", "challenge"] : ["conceal", "control", "compartmentalize"];
+  } else if (
+    label.includes("goal") ||
+    label.includes("organization") ||
+    label.includes("leadership")
+  ) {
+    words = inverse ? ["adapt", "improvise", "pivot"] : ["command", "coordinate", "prioritize"];
+  } else if (
+    label.includes("money") ||
+    label.includes("wealth") ||
+    label.includes("resource") ||
+    label.includes("trade")
+  ) {
+    words = inverse ? ["spend", "risk", "discard"] : ["bargain", "calculate", "secure"];
+  }
+
+  if (words.length === 0) {
+    words =
+      signal.direction === "inverse"
+        ? ["resist", "counter", "reject"]
+        : signal.direction === "neutral"
+          ? ["balance", "adjust", "stabilize"]
+          : signal.direction === "unspecified"
+            ? ["consider", "probe", "adapt"]
+            : ["commit", "assert", "press"];
+  }
+
+  if (strong) {
+    if (!words.includes("commit")) {
+      words[0] = inverse ? "counter" : "commit";
+    }
+  } else {
+    words[2] = signal.direction === "inverse" ? "pause" : "measure";
+  }
+
+  const unique = [...new Set(words.map((word) => word.trim()).filter(Boolean))];
+  while (unique.length < 3) {
+    unique.push(unique.length === 0 ? "act" : unique.length === 1 ? "adjust" : "stabilize");
+  }
+  return unique.slice(0, 3);
+};
+
+const buildDeterministicTraitActions = (
+  sheet: CharacterSheet,
+  traitProfile: TraitDecisionProfile,
+  people: string[],
+  items: string[],
+): {
+  mode: "relevant" | "fallback";
+  entries: DeterministicTraitAction[];
+} => {
+  const situationTokens = new Set(tokenizeText(traitProfile.cleanSituation));
+  const scored = extractTraitSignals(sheet)
+    .filter((signal) => isRelevantDecisionSection(signal.section))
+    .map((signal) =>
+      scoreTraitSignal(signal, situationTokens, traitProfile.tags, people, items),
+    );
+
+  const sortByPriority = (signals: TraitSignal[]): TraitSignal[] =>
+    [...signals].sort((a, b) => {
+      const emphasisDelta = (b.emphasis ?? 5) - (a.emphasis ?? 5);
+      if (emphasisDelta !== 0) {
+        return emphasisDelta;
+      }
+      if (b.relevance !== a.relevance) {
+        return b.relevance - a.relevance;
+      }
+      if (b.intensity !== a.intensity) {
+        return b.intensity - a.intensity;
+      }
+      return b.priority - a.priority;
+    });
+
+  const relevantSignals = sortByPriority(
+    scored.filter((signal) => signal.relevance > 0.8),
+  );
+  const fallbackSignals = sortByPriority(
+    scored.filter((signal) => (signal.emphasis ?? 0) >= 1),
+  );
+  const mode: "relevant" | "fallback" =
+    relevantSignals.length > 0 ? "relevant" : "fallback";
+  const selectedSignals =
+    (mode === "relevant" ? relevantSignals : fallbackSignals).slice(0, 3);
+
+  const rawWeights = selectedSignals.map((signal) => {
+    const emphasisFactor = (signal.emphasis ?? 5) + 1;
+    const intensityFactor = 1 + signal.intensity;
+    const relevanceFactor = mode === "relevant" ? 1 + signal.relevance : 1;
+    return emphasisFactor * intensityFactor * relevanceFactor;
+  });
+  const totalWeight = rawWeights.reduce((sum, value) => sum + value, 0);
+
+  return {
+    mode,
+    entries: selectedSignals.map((signal, index) => ({
+      signal,
+      actionWords: buildActionWordsForSignal(signal),
+      weightPct:
+        totalWeight > 0
+          ? Math.round((rawWeights[index] / totalWeight) * 100)
+          : Math.round(100 / Math.max(selectedSignals.length, 1)),
+    })),
+  };
+};
+
+const formatDeterministicTraitActionOutput = (
+  traitProfile: TraitDecisionProfile,
+  result: { mode: "relevant" | "fallback"; entries: DeterministicTraitAction[] },
+): string => {
+  const keywords = tokenizeText(traitProfile.cleanSituation);
+  const lines = [
+    "Deterministic trait-action output",
+    `Situation keywords: ${keywords.join(", ") || "none detected"}`,
+    `Selection mode: ${
+      result.mode === "relevant"
+        ? "relevant emphasized traits matched to prompt"
+        : "fallback to most emphasized + extreme valued traits"
+    }`,
+    "",
+  ];
+
+  if (result.entries.length === 0) {
+    lines.push("No numeric trait rows were available for deterministic matching.");
+    return lines.join("\n");
+  }
+
+  result.entries.forEach((entry, index) => {
+    const valueText =
+      entry.signal.value === null ? "n/a" : entry.signal.value.toFixed(0);
+    const emphasisText =
+      entry.signal.emphasis === null ? "n/a" : entry.signal.emphasis.toFixed(0);
+    lines.push(
+      `${index + 1}. ${entry.signal.label} [${entry.signal.section}]`,
+    );
+    lines.push(
+      `   value=${valueText} (${entry.signal.direction}), emphasis=${emphasisText}, relevance=${entry.signal.relevance.toFixed(2)}, weight=${entry.weightPct}%`,
+    );
+    lines.push(`   action words: ${entry.actionWords.join(", ")}`);
+    if (entry.signal.reasons.length > 0) {
+      lines.push(`   match reasons: ${entry.signal.reasons.join("; ")}`);
+    }
+    lines.push("");
+  });
+
+  return lines.join("\n").trim();
+};
+
 const buildHeuristicEffects = (
   sheet: CharacterSheet,
   prompt: string,
@@ -1765,6 +1962,9 @@ function App() {
   const forceIosLiteMode =
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).get("force_ios_lite") === "1";
+  const deterministicTraitModeEnabled =
+    typeof window === "undefined" ||
+    new URLSearchParams(window.location.search).get("legacy_narrative") !== "1";
   const isIOS = detectIOS() || forceIosLiteMode;
   const iosLowGpuLimit =
     isIOS &&
@@ -2178,7 +2378,11 @@ function App() {
 
     setErrorText("");
     setIsGenerating(true);
-    setStatusText("Generating narrative output...");
+    setStatusText(
+      deterministicTraitModeEnabled
+        ? "Computing deterministic trait-action output..."
+        : "Generating narrative output...",
+    );
 
     const people = parseTaggedValues(situation, /#([^#\n]+?)#/g);
     const items = parseTaggedValues(situation, /\*([^*\n]+?)\*/g);
@@ -2192,14 +2396,70 @@ function App() {
       traitProfile,
     );
     const tagEffects = buildTagEffects(sheet, people, items);
+    const deterministicTraitResult = buildDeterministicTraitActions(
+      sheet,
+      traitProfile,
+      people,
+      items,
+    );
+    const deterministicOutputText = formatDeterministicTraitActionOutput(
+      traitProfile,
+      deterministicTraitResult,
+    );
+    const deterministicImportance =
+      deterministicTraitResult.entries.length > 0
+        ? clampZeroToTen(
+            deterministicTraitResult.entries.reduce(
+              (sum, entry) => sum + (entry.signal.emphasis ?? 5),
+              0,
+            ) / deterministicTraitResult.entries.length,
+          )
+        : 5;
     const heuristicTraitEffects = buildHeuristicEffects(sheet, situation);
     const heuristic = buildHeuristicNarrative(actionPlan);
     const activePath: DebugPromptSnapshot["activePath"] =
-      modelReady && engineRef.current
-        ? "webllm"
-        : iosLiteModeActive
-          ? "ios-lite"
-          : "heuristic-fallback";
+      deterministicTraitModeEnabled
+        ? "deterministic-trait"
+        : modelReady && engineRef.current
+          ? "webllm"
+          : iosLiteModeActive
+            ? "ios-lite"
+            : "heuristic-fallback";
+
+    if (deterministicTraitModeEnabled) {
+      if (debugPromptInspectorEnabled) {
+        setDebugPromptSnapshot({
+          activePath,
+          cleanSituation: traitProfile.cleanSituation,
+          tags: traitProfile.tags,
+          profileText: traitProfile.profileText,
+          actionPlan: deterministicOutputText,
+          personaSeed,
+          personaPrimeSystemPrompt:
+            "Deterministic mode active; persona priming skipped.",
+          personaPrimeUserPrompt: "",
+          personaLock: "",
+          personaPrimeOutput: "",
+          personaPrimeSource: "fallback",
+          webLlmSystemPrompt:
+            "Deterministic mode active; WebLLM system prompt not used.",
+          webLlmUserPrompt:
+            "Deterministic mode active; WebLLM user prompt not used.",
+          iosLitePrompt:
+            "Deterministic mode active; iOS-lite prompt not used.",
+        });
+      }
+
+      setGeneratedOutput({
+        narrative: deterministicOutputText,
+        importance: deterministicImportance,
+        effects: tagEffects,
+      });
+      setCanApplyGeneratedChanges(tagEffects.length > 0);
+      setStatusText("Generated deterministic trait-action output.");
+      setIsGenerating(false);
+      return;
+    }
 
     try {
       let generated: GeneratedNarrativeOutput | null = null;
@@ -2551,7 +2811,11 @@ function App() {
           onClick={handleGenerateAction}
           disabled={isGenerating}
         >
-          {isGenerating ? "Generating..." : "Generate Narrative + Effects"}
+          {isGenerating
+            ? "Analyzing..."
+            : deterministicTraitModeEnabled
+              ? "Generate Trait Actions"
+              : "Generate Narrative + Effects"}
         </button>
         <button
           className="button"
@@ -2565,7 +2829,11 @@ function App() {
         {errorText && <p className="error">{errorText}</p>}
         <p className="status">{statusText}</p>
 
-        <label className="label">Narrative output</label>
+        <label className="label">
+          {deterministicTraitModeEnabled
+            ? "Deterministic trait-action output"
+            : "Narrative output"}
+        </label>
         <textarea
           rows={6}
           readOnly
@@ -2576,7 +2844,9 @@ function App() {
           Event importance: <strong>{generatedOutput?.importance ?? "-"}</strong>
         </p>
 
-        <label className="label">Effects</label>
+        <label className="label">
+          {deterministicTraitModeEnabled ? "Tag-driven sheet effects" : "Effects"}
+        </label>
         {generatedOutput && generatedOutput.effects.length > 0 ? (
           <ul className="effect-list">
             {generatedOutput.effects.map((effect) => (
@@ -2659,7 +2929,7 @@ function App() {
               value={debugPromptSnapshot?.profileText ?? ""}
             />
 
-            <label className="label">Deterministic action plan (silent context)</label>
+            <label className="label">Deterministic analysis (silent context)</label>
             <textarea
               rows={9}
               readOnly
@@ -2708,8 +2978,8 @@ function App() {
         </p>
         <p>Use "Load random test sheet" for quick end-to-end testing.</p>
         <p>
-          Generated output includes narrative + effects list. Apply button writes those effects
-          to the sheet and appends a History event with importance and effect summary.
+          Generated output lists the top 3 deterministic trait drivers and 3 action words per
+          trait. Apply button writes listed tag effects to the sheet and appends a History event.
         </p>
       </section>
     </main>
