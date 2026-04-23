@@ -4,9 +4,10 @@ type Props = {
   layout: StationLayout | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   stageRef: React.RefObject<any>;
+  gltfExporter: (() => void) | null;
 };
 
-export function ExportButton({ layout, stageRef }: Props) {
+export function ExportButton({ layout, stageRef, gltfExporter }: Props) {
   function exportPng() {
     if (!stageRef.current) return;
     const dataUrl = stageRef.current.toDataURL({ pixelRatio: 2 });
@@ -28,12 +29,15 @@ export function ExportButton({ layout, stageRef }: Props) {
   }
 
   return (
-    <div style={{ display: "flex", gap: "0.5rem" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
       <button className="button secondary" style={{ margin: 0 }} onClick={exportPng} disabled={!layout}>
-        Export PNG
+        PNG (2D)
+      </button>
+      <button className="button secondary" style={{ margin: 0 }} onClick={() => gltfExporter?.()} disabled={!gltfExporter}>
+        GLB (3D)
       </button>
       <button className="button secondary" style={{ margin: 0 }} onClick={exportJson} disabled={!layout}>
-        Export JSON
+        JSON
       </button>
     </div>
   );

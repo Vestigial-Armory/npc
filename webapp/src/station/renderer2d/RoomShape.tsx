@@ -1,4 +1,4 @@
-import { Rect, Text, Group } from "react-konva";
+import { Rect, Text, Group, Line } from "react-konva";
 import type { StationModule } from "../types";
 import { MODULE_COLORS } from "../types";
 
@@ -12,8 +12,13 @@ type Props = {
 };
 
 export function RoomShape({ module, selected, onClick, onDragEnd }: Props) {
-  const { rect, type, label } = module;
-  const color = MODULE_COLORS[type];
+  const { rect, type, label, damaged, hullAirlock } = module;
+  const baseColor = MODULE_COLORS[type];
+  const fillColor = damaged ? "#2a1a1a" : baseColor + "44";
+  const strokeColor = damaged ? "#a03030" : selected ? "#ffffff" : baseColor;
+  const strokeWidth = selected ? 2.5 : damaged ? 2 : 1.5;
+  const w = rect.w * SCALE;
+  const h = rect.h * SCALE;
 
   return (
     <Group
@@ -31,20 +36,41 @@ export function RoomShape({ module, selected, onClick, onDragEnd }: Props) {
       }}
     >
       <Rect
-        width={rect.w * SCALE}
-        height={rect.h * SCALE}
-        fill={color + "44"}
-        stroke={selected ? "#ffffff" : color}
-        strokeWidth={selected ? 2.5 : 1.5}
+        width={w}
+        height={h}
+        fill={fillColor}
+        stroke={strokeColor}
+        strokeWidth={strokeWidth}
         cornerRadius={4}
+        dash={damaged ? [6, 3] : undefined}
       />
+
+      {/* Airlock indicator: small chevron on top-right corner */}
+      {hullAirlock && type === "airlock" && (
+        <Line
+          points={[w - 10, 4, w - 4, 4, w - 4, 10]}
+          stroke="#aaaaaa"
+          strokeWidth={1.5}
+          lineCap="round"
+          lineJoin="round"
+        />
+      )}
+
+      {/* Damage cross-hatching overlay */}
+      {damaged && (
+        <>
+          <Line points={[4, 4, w - 4, h - 4]} stroke="#a0303066" strokeWidth={1} />
+          <Line points={[w - 4, 4, 4, h - 4]} stroke="#a0303066" strokeWidth={1} />
+        </>
+      )}
+
       <Text
         x={4}
-        y={rect.h * SCALE / 2 - 7}
-        width={rect.w * SCALE - 8}
-        text={label}
+        y={h / 2 - 7}
+        width={w - 8}
+        text={damaged ? `[OFFLINE] ${label}` : label}
         fontSize={11}
-        fill="#f5f7ff"
+        fill={damaged ? "#c07070" : "#f5f7ff"}
         align="center"
         wrap="none"
         ellipsis

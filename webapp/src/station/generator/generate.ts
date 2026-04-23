@@ -94,6 +94,26 @@ export function generate(params: GenerationParams): StationLayout {
     },
   }));
 
+  // Mark hull-adjacent modules as airlock candidates
+  const hullMargin = 3;
+  modules = modules.map(m => ({
+    ...m,
+    hullAirlock: m.type === "airlock" || (
+      m.rect.x <= hullMargin ||
+      m.rect.y <= hullMargin ||
+      m.rect.x + m.rect.w >= bounds.w - hullMargin ||
+      m.rect.y + m.rect.h >= bounds.h - hullMargin
+    ),
+  }));
+
+  // Derelict: randomly damage ~40% of modules
+  if (params.purpose === "derelict") {
+    modules = modules.map(m => ({
+      ...m,
+      damaged: rng.bool(0.4),
+    }));
+  }
+
   const corridors = buildCorridors(
     modules.map(m => m.id),
     modules.map(m => m.rect),

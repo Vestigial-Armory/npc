@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import type { RefObject } from "react";
 import { Stage, Layer } from "react-konva";
 import type Konva from "konva";
 import type { StationLayout } from "../types";
@@ -11,13 +11,12 @@ type Props = {
   selectedId: string | null;
   connectingFromId: string | null;
   dispatch: (a: EditorAction) => void;
+  stageRef: RefObject<Konva.Stage | null>;
   width: number;
   height: number;
 };
 
-export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch, width, height }: Props) {
-  const stageRef = useRef<Konva.Stage>(null);
-
+export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch, stageRef, width, height }: Props) {
   const canvasW = layout.bounds.w * SCALE;
   const canvasH = layout.bounds.h * SCALE;
   const scaleX = width / canvasW;
@@ -42,7 +41,7 @@ export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch
         height={height}
         scaleX={fitScale}
         scaleY={fitScale}
-        style={{ background: "#070b18", borderRadius: 8, border: "1px solid #24305b" }}
+        style={{ background: "#070b18", borderRadius: 8, border: "1px solid #24305b", display: "block" }}
         onClick={e => {
           if (e.target === e.target.getStage()) {
             dispatch({ type: "SET_SELECTION", payload: { id: null } });

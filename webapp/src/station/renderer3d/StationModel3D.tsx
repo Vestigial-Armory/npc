@@ -1,5 +1,7 @@
-import { Canvas } from "@react-three/fiber";
+import { useEffect, useCallback } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Grid } from "@react-three/drei";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import type { StationLayout } from "../types";
 import type { EditorAction } from "../editor/editorReducer";
 import { RoomBox } from "./RoomBox";
@@ -11,9 +13,34 @@ type Props = {
   dispatch: (a: EditorAction) => void;
   width: number;
   height: number;
+  onExporterReady?: (fn: () => void) => void;
 };
 
-export function StationModel3D({ layout, selectedId, dispatch, width, height }: Props) {
+function GltfExporter({ onReady, seed }: { onReady?: (fn: () => void) => void; seed: string }) {
+  const { scene } = useThree();
+  const exportFn = useCallback(() => {
+    const exporter = new GLTFExporter();
+    exporter.parse(
+      scene,
+      result => {
+        const blob = new Blob([result as ArrayBuffer], { type: "model/gltf-binary" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `station-${seed}.glb`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+      err => console.error("GLTF export failed:", err),
+      { binary: true }
+    );
+  }, [scene, seed]);
+
+  useEffect(() => { onReady?.(exportFn); }, [onReady, exportFn]);
+  return null;
+}
+
+export function StationModel3D({ layout, selectedId, dispatch, width, height, onExporterReady }: Props) {
   const cx = layout.bounds.w / 2;
   const cz = layout.bounds.h / 2;
 
@@ -53,6 +80,8 @@ export function StationModel3D({ layout, selectedId, dispatch, width, height }: 
             infiniteGrid
           />
         </group>
+
+        <GltfExporter onReady={onExporterReady} seed={layout.seed} />
 
         <OrbitControls
           target={[0, 2, 0]}

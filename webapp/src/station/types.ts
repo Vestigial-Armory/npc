@@ -17,6 +17,8 @@ export type StationModule = {
   label: string;
   rect: { x: number; y: number; w: number; h: number };
   floor: number;
+  damaged?: boolean;
+  hullAirlock?: boolean;
   meta: Record<string, string | number>;
 };
 
