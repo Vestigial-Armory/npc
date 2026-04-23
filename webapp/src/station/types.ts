@@ -46,6 +46,7 @@ export type GenerationParams = {
   symmetry: "none" | "bilateral" | "radial";
   density: number;
   floorCount: number;
+  stationShape?: "ring" | "cylinder" | "sphere" | "box";
 };
 
 export const MODULE_COLORS: Record<ModuleType, string> = {

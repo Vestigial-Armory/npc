@@ -48,7 +48,11 @@ export function StationModel3D({ layout, selectedId, showSkin, dispatch, width, 
   const cz = layout.bounds.h / 2;
   const floorCount = layout.params.floorCount ?? 1;
   const totalHeight = floorCount * FLOOR_GAP;
-  const camDist = Math.max(layout.bounds.w, layout.bounds.h) * 0.9 + totalHeight * 0.5;
+  const maxSpan = Math.max(layout.bounds.w, layout.bounds.h);
+  const shape = layout.params.stationShape ?? "box";
+  // Non-box shapes extend well beyond the BSP footprint; pull camera back so the full silhouette fits
+  const exteriorR = shape !== "box" ? maxSpan * (shape === "ring" ? 0.46 : shape === "sphere" ? 0.42 : 0.30) : 0;
+  const camDist = Math.max(maxSpan * 0.9 + totalHeight * 0.5, exteriorR * 3.8);
 
   // Exterior view: sun-like directional light from one side, dim fill from the other
   // Interior view: warmer overhead point lights

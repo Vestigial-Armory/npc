@@ -36,6 +36,15 @@ export function ParamsForm({ params, onChange, onGenerate, disabled }: Props) {
         </div>
       </label>
 
+      <label className="label">Station Shape
+        <select value={params.stationShape ?? "box"} onChange={e => set("stationShape", e.target.value as GenerationParams["stationShape"])} style={{ marginTop: "0.35rem" }}>
+          <option value="box">Box (modular)</option>
+          <option value="ring">Ring</option>
+          <option value="cylinder">Cylinder</option>
+          <option value="sphere">Sphere</option>
+        </select>
+      </label>
+
       <label className="label">Purpose
         <select value={params.purpose} onChange={e => set("purpose", e.target.value as GenerationParams["purpose"])} style={{ marginTop: "0.35rem" }}>
           <option value="research">Research</option>

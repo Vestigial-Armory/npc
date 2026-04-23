@@ -18,6 +18,7 @@ const DEFAULT_PARAMS: GenerationParams = {
   symmetry: "none",
   density: 0.3,
   floorCount: 2,
+  stationShape: "box",
 };
 
 const SIDEBAR = 300;

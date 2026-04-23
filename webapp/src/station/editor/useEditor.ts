@@ -12,6 +12,7 @@ const EMPTY_LAYOUT: StationLayout = {
     symmetry: "none",
     density: 0.3,
     floorCount: 1,
+    stationShape: "box",
   },
   modules: [],
   corridors: [],
