@@ -12,9 +12,15 @@
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@mlc-ai/web-llm": "^0.2.81",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.0",
+    "konva": "^10.2.5",
     "papaparse": "^5.5.3",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-konva": "^19.2.3",
+    "seedrandom": "^3.0.5",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -22,6 +28,8 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/seedrandom": "^3.0.8",
+    "@types/three": "^0.184.0",
     "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

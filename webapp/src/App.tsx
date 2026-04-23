@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Papa from "papaparse";
 import type { MLCEngineInterface } from "@mlc-ai/web-llm";
 import "./App.css";
+import { StationPage } from "./station/StationPage";
 
 type NavigatorWithGpu = Navigator & {
   gpu?: {
@@ -1917,6 +1918,7 @@ const appendHistoryEvent = (
 };
 
 function App() {
+  const [activeTab, setActiveTab] = useState<"npc" | "station">("npc");
   const [fileName, setFileName] = useState<string>("");
   const [sheet, setSheet] = useState<CharacterSheet | null>(null);
   const [situation, setSituation] = useState<string>(DEFAULT_SITUATION);
@@ -2676,7 +2678,32 @@ function App() {
     URL.revokeObjectURL(url);
   };
 
+  if (activeTab === "station") {
+    return (
+      <div>
+        <nav style={{ display: "flex", gap: "0.5rem", padding: "0.75rem 1rem", background: "#0a0f20", borderBottom: "1px solid #24305b" }}>
+          <button className="button secondary" style={{ margin: 0, width: "auto", padding: "0.4rem 1rem" }} onClick={() => setActiveTab("npc")}>
+            NPC Generator
+          </button>
+          <button className="button primary" style={{ margin: 0, width: "auto", padding: "0.4rem 1rem" }}>
+            Station Generator
+          </button>
+        </nav>
+        <StationPage />
+      </div>
+    );
+  }
+
   return (
+    <div>
+      <nav style={{ display: "flex", gap: "0.5rem", padding: "0.75rem 1rem", background: "#0a0f20", borderBottom: "1px solid #24305b" }}>
+        <button className="button primary" style={{ margin: 0, width: "auto", padding: "0.4rem 1rem" }}>
+          NPC Generator
+        </button>
+        <button className="button secondary" style={{ margin: 0, width: "auto", padding: "0.4rem 1rem" }} onClick={() => setActiveTab("station")}>
+          Station Generator
+        </button>
+      </nav>
     <main className="app">
       <section className="card">
         <h1>NPC Action Generator</h1>
@@ -2983,6 +3010,7 @@ function App() {
         </p>
       </section>
     </main>
+    </div>
   );
 }
 
