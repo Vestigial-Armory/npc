@@ -38,28 +38,57 @@ function GltfExporter({ onReady, seed }: { onReady?: (fn: () => void) => void; s
       { binary: true }
     );
   }, [scene, seed]);
-
   useEffect(() => { onReady?.(exportFn); }, [onReady, exportFn]);
   return null;
 }
 
+// Resets camera to a clean position whenever showSkin toggles, so the scene
+// is never occluded after switching between interior and exterior modes.
+function CameraManager({ showSkin, camPos, targetY }: {
+  showSkin: boolean;
+  camPos: [number, number, number];
+  targetY: number;
+}) {
+  const { camera } = useThree();
+  useEffect(() => {
+    camera.position.set(...camPos);
+    camera.lookAt(0, targetY, 0);
+    camera.updateMatrixWorld();
+  }, [showSkin, camPos, targetY, camera]);
+
+  return (
+    <OrbitControls
+      target={[0, targetY, 0]}
+      enableDamping
+      dampingFactor={0.08}
+      maxPolarAngle={Math.PI / 1.05}
+    />
+  );
+}
+
 export function StationModel3D({ layout, selectedId, showSkin, dispatch, width, height, onExporterReady }: Props) {
-  const cx = layout.bounds.w / 2;
-  const cz = layout.bounds.h / 2;
   const floorCount = layout.params.floorCount ?? 1;
   const totalHeight = floorCount * FLOOR_GAP;
   const maxSpan = Math.max(layout.bounds.w, layout.bounds.h);
   const shape = layout.params.stationShape ?? "box";
-  // Non-box shapes extend well beyond the BSP footprint; pull camera back so the full silhouette fits
-  const exteriorR = shape !== "box" ? maxSpan * (shape === "ring" ? 0.46 : shape === "sphere" ? 0.42 : 0.30) : 0;
-  const camDist = Math.max(maxSpan * 0.9 + totalHeight * 0.5, exteriorR * 3.8);
 
-  // Exterior view: sun-like directional light from one side, dim fill from the other
-  // Interior view: warmer overhead point lights
+  const exteriorR = shape !== "box"
+    ? maxSpan * (shape === "ring" ? 0.46 : shape === "sphere" ? 0.42 : 0.30)
+    : 0;
+  const camDist = Math.max(maxSpan * 0.9 + totalHeight * 0.5, exteriorR * 3.8);
+  const targetY = totalHeight * 0.4;
+
+  // Camera starts slightly to the side and above, looking at station centre
+  const camPos: [number, number, number] = [camDist * 0.45, camDist * 0.65, camDist * 0.8];
+
+  // Interior lights live at world-space equivalents of station-footprint centre
+  const cx = layout.bounds.w / 2;
+  const cz = layout.bounds.h / 2;
+
   return (
     <div style={{ width, height, borderRadius: 8, overflow: "hidden", border: "1px solid #24305b" }}>
       <Canvas
-        camera={{ position: [cx, camDist * 0.7, cz + camDist * 0.6], fov: 45 }}
+        camera={{ position: camPos, fov: 45 }}
         onCreated={({ gl }) => gl.setClearColor("#000005")}
         style={{ background: "#000005" }}
         onClick={() => dispatch({ type: "SET_SELECTION", payload: { id: null } })}
@@ -68,17 +97,15 @@ export function StationModel3D({ layout, selectedId, showSkin, dispatch, width, 
 
         {showSkin ? (
           <>
-            {/* Exterior lighting: harsh directional sun, soft blue fill */}
             <ambientLight intensity={0.12} color="#1a2050" />
             <directionalLight position={[200, 120, 80]} intensity={2.2} color="#fff8f0" />
             <directionalLight position={[-150, -40, -100]} intensity={0.18} color="#2030a0" />
           </>
         ) : (
           <>
-            {/* Interior lighting: warm overhead, soft ambient */}
-            <ambientLight intensity={0.35} />
-            <directionalLight position={[cx + 40, 80, cz + 30]} intensity={1.3} castShadow />
-            <pointLight position={[cx, totalHeight + 20, cz]} intensity={0.7} color="#a0b0ff" />
+            <ambientLight intensity={0.45} />
+            <directionalLight position={[50, 80, 40]} intensity={1.4} />
+            <pointLight position={[cx - layout.bounds.w / 2, totalHeight + 15, cz - layout.bounds.h / 2]} intensity={0.8} color="#a0b0ff" />
           </>
         )}
 
@@ -105,12 +132,7 @@ export function StationModel3D({ layout, selectedId, showSkin, dispatch, width, 
         </group>
 
         <GltfExporter onReady={onExporterReady} seed={layout.seed} />
-
-        <OrbitControls
-          target={[0, totalHeight * 0.4, 0]}
-          enableDamping
-          dampingFactor={0.08}
-        />
+        <CameraManager showSkin={showSkin} camPos={camPos} targetY={targetY} />
       </Canvas>
     </div>
   );

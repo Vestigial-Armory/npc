@@ -5,6 +5,7 @@ import type { StationLayout } from "../types";
 import type { EditorAction } from "../editor/editorReducer";
 import { RoomShape, SCALE } from "./RoomShape";
 import { CorridorLine } from "./CorridorLine";
+import { ShapeOutline } from "./ShapeOutline";
 
 type Props = {
   layout: StationLayout;
@@ -18,7 +19,7 @@ type Props = {
 };
 
 export function FloorPlanCanvas({ layout, activeFloor, selectedId, connectingFromId, dispatch, stageRef, width, height }: Props) {
-  const modules = layout.modules.filter(m => m.floor === activeFloor);
+  const modules  = layout.modules.filter(m => m.floor === activeFloor);
   const moduleIds = new Set(modules.map(m => m.id));
   const corridors = layout.corridors.filter(c => moduleIds.has(c.fromId) && moduleIds.has(c.toId));
 
@@ -51,11 +52,19 @@ export function FloorPlanCanvas({ layout, activeFloor, selectedId, connectingFro
           }
         }}
       >
+        {/* Background: station shape footprint + guide lines */}
+        <Layer>
+          <ShapeOutline layout={layout} />
+        </Layer>
+
+        {/* Corridors */}
         <Layer>
           {corridors.map(c => (
             <CorridorLine key={c.id} corridor={c} modules={modules} />
           ))}
         </Layer>
+
+        {/* Rooms */}
         <Layer>
           {modules.map(m => (
             <RoomShape
