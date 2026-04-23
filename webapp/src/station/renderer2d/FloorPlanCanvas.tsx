@@ -1,0 +1,73 @@
+import { useRef } from "react";
+import { Stage, Layer } from "react-konva";
+import type Konva from "konva";
+import type { StationLayout } from "../types";
+import type { EditorAction } from "../editor/editorReducer";
+import { RoomShape, SCALE } from "./RoomShape";
+import { CorridorLine } from "./CorridorLine";
+
+type Props = {
+  layout: StationLayout;
+  selectedId: string | null;
+  connectingFromId: string | null;
+  dispatch: (a: EditorAction) => void;
+  width: number;
+  height: number;
+};
+
+export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch, width, height }: Props) {
+  const stageRef = useRef<Konva.Stage>(null);
+
+  const canvasW = layout.bounds.w * SCALE;
+  const canvasH = layout.bounds.h * SCALE;
+  const scaleX = width / canvasW;
+  const scaleY = height / canvasH;
+  const fitScale = Math.min(scaleX, scaleY, 1);
+
+  function handleModuleClick(id: string) {
+    if (connectingFromId !== null && connectingFromId !== id) {
+      dispatch({ type: "ADD_CORRIDOR", payload: { fromId: connectingFromId, toId: id, width: 1, waypoints: [] } });
+      dispatch({ type: "SET_CONNECTING", payload: { id: null } });
+      dispatch({ type: "SET_SELECTION", payload: { id } });
+    } else {
+      dispatch({ type: "SET_SELECTION", payload: { id: selectedId === id ? null : id } });
+    }
+  }
+
+  return (
+    <div style={{ cursor: connectingFromId ? "crosshair" : "default" }}>
+      <Stage
+        ref={stageRef}
+        width={width}
+        height={height}
+        scaleX={fitScale}
+        scaleY={fitScale}
+        style={{ background: "#070b18", borderRadius: 8, border: "1px solid #24305b" }}
+        onClick={e => {
+          if (e.target === e.target.getStage()) {
+            dispatch({ type: "SET_SELECTION", payload: { id: null } });
+          }
+        }}
+      >
+        <Layer>
+          {layout.corridors.map(c => (
+            <CorridorLine key={c.id} corridor={c} modules={layout.modules} />
+          ))}
+        </Layer>
+        <Layer>
+          {layout.modules.map(m => (
+            <RoomShape
+              key={m.id}
+              module={m}
+              selected={m.id === selectedId}
+              onClick={() => handleModuleClick(m.id)}
+              onDragEnd={(x, y) =>
+                dispatch({ type: "MOVE_MODULE", payload: { id: m.id, rect: { ...m.rect, x, y } } })
+              }
+            />
+          ))}
+        </Layer>
+      </Stage>
+    </div>
+  );
+}
