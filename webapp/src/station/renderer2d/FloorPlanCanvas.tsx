@@ -8,6 +8,7 @@ import { CorridorLine } from "./CorridorLine";
 
 type Props = {
   layout: StationLayout;
+  activeFloor: number;
   selectedId: string | null;
   connectingFromId: string | null;
   dispatch: (a: EditorAction) => void;
@@ -16,12 +17,14 @@ type Props = {
   height: number;
 };
 
-export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch, stageRef, width, height }: Props) {
+export function FloorPlanCanvas({ layout, activeFloor, selectedId, connectingFromId, dispatch, stageRef, width, height }: Props) {
+  const modules = layout.modules.filter(m => m.floor === activeFloor);
+  const moduleIds = new Set(modules.map(m => m.id));
+  const corridors = layout.corridors.filter(c => moduleIds.has(c.fromId) && moduleIds.has(c.toId));
+
   const canvasW = layout.bounds.w * SCALE;
   const canvasH = layout.bounds.h * SCALE;
-  const scaleX = width / canvasW;
-  const scaleY = height / canvasH;
-  const fitScale = Math.min(scaleX, scaleY, 1);
+  const fitScale = Math.min(width / canvasW, height / canvasH, 1);
 
   function handleModuleClick(id: string) {
     if (connectingFromId !== null && connectingFromId !== id) {
@@ -49,12 +52,12 @@ export function FloorPlanCanvas({ layout, selectedId, connectingFromId, dispatch
         }}
       >
         <Layer>
-          {layout.corridors.map(c => (
-            <CorridorLine key={c.id} corridor={c} modules={layout.modules} />
+          {corridors.map(c => (
+            <CorridorLine key={c.id} corridor={c} modules={modules} />
           ))}
         </Layer>
         <Layer>
-          {layout.modules.map(m => (
+          {modules.map(m => (
             <RoomShape
               key={m.id}
               module={m}

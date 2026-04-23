@@ -55,12 +55,17 @@ export function ParamsForm({ params, onChange, onGenerate, disabled }: Props) {
         </select>
       </label>
 
+      <label className="label">Floors: {params.floorCount}
+        <input
+          type="range" min={1} max={4} value={params.floorCount}
+          onChange={e => set("floorCount", Number(e.target.value))}
+          style={{ width: "100%", marginTop: "0.35rem", accentColor: "#3150d9" }}
+        />
+      </label>
+
       <label className="label">Module Count: {params.moduleCount}
         <input
-          type="range"
-          min={4}
-          max={36}
-          value={params.moduleCount}
+          type="range" min={4} max={36} value={params.moduleCount}
           onChange={e => set("moduleCount", Number(e.target.value))}
           style={{ width: "100%", marginTop: "0.35rem", accentColor: "#3150d9" }}
         />
@@ -76,10 +81,7 @@ export function ParamsForm({ params, onChange, onGenerate, disabled }: Props) {
 
       <label className="label">Corridor Density: {Math.round(params.density * 100)}%
         <input
-          type="range"
-          min={0}
-          max={100}
-          value={Math.round(params.density * 100)}
+          type="range" min={0} max={100} value={Math.round(params.density * 100)}
           onChange={e => set("density", Number(e.target.value) / 100)}
           style={{ width: "100%", marginTop: "0.35rem", accentColor: "#3150d9" }}
         />

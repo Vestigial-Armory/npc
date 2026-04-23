@@ -18,15 +18,19 @@ const SIZE_MODULE_COUNT: Record<GenerationParams["size"], [number, number]> = {
   huge:   [20, 36],
 };
 
+const MAX_FLOORS: Record<GenerationParams["size"], number> = {
+  small: 2,
+  medium: 3,
+  large: 4,
+  huge: 4,
+};
+
 function applyBilateralSymmetry(modules: StationModule[], bounds: { w: number; h: number }): StationModule[] {
   const originals = [...modules];
   const mirrored: StationModule[] = originals.map(m => ({
     ...m,
     id: `${m.id}_mir`,
-    rect: {
-      ...m.rect,
-      x: bounds.w - m.rect.x - m.rect.w,
-    },
+    rect: { ...m.rect, x: bounds.w - m.rect.x - m.rect.w },
   }));
   return [...originals, ...mirrored];
 }
@@ -60,19 +64,19 @@ export function generate(params: GenerationParams): StationLayout {
 
   const [minMod, maxMod] = SIZE_MODULE_COUNT[params.size];
   const targetCount = Math.max(minMod, Math.min(maxMod, params.moduleCount));
+  const floorCount = Math.max(1, Math.min(MAX_FLOORS[params.size], params.floorCount));
 
   const rects = buildBSP({ x: 0, y: 0, ...bounds }, targetCount, rng);
   const picked = rects.slice(0, targetCount);
 
   let modules: StationModule[] = picked.map((rect, i) => {
     const type = weightedPickType(params.purpose, () => rng.float());
-    const labels = MODULE_LABELS[type];
     return {
       id: `m${i}`,
       type,
-      label: rng.pick(labels),
+      label: rng.pick(MODULE_LABELS[type]),
       rect,
-      floor: 0,
+      floor: i % floorCount,
       meta: {},
     };
   });
@@ -83,7 +87,7 @@ export function generate(params: GenerationParams): StationLayout {
     modules = applyRadialSymmetry(modules, bounds);
   }
 
-  // Clamp mirrored modules to bounds
+  // Clamp mirrored modules to bounds, preserve floor assignment
   modules = modules.map(m => ({
     ...m,
     rect: {
@@ -94,7 +98,7 @@ export function generate(params: GenerationParams): StationLayout {
     },
   }));
 
-  // Mark hull-adjacent modules as airlock candidates
+  // Mark hull-adjacent modules
   const hullMargin = 3;
   modules = modules.map(m => ({
     ...m,
@@ -108,18 +112,22 @@ export function generate(params: GenerationParams): StationLayout {
 
   // Derelict: randomly damage ~40% of modules
   if (params.purpose === "derelict") {
-    modules = modules.map(m => ({
-      ...m,
-      damaged: rng.bool(0.4),
-    }));
+    modules = modules.map(m => ({ ...m, damaged: rng.bool(0.4) }));
   }
 
-  const corridors = buildCorridors(
-    modules.map(m => m.id),
-    modules.map(m => m.rect),
-    params.density,
-    rng
-  );
+  // Build corridors per floor
+  const corridors = [];
+  for (let f = 0; f < floorCount; f++) {
+    const fm = modules.filter(m => m.floor === f);
+    if (fm.length > 1) {
+      corridors.push(...buildCorridors(
+        fm.map(m => m.id),
+        fm.map(m => m.rect),
+        params.density,
+        rng
+      ));
+    }
+  }
 
-  return { seed: params.seed, params, modules, corridors, bounds };
+  return { seed: params.seed, params: { ...params, floorCount }, modules, corridors, bounds };
 }

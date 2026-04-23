@@ -45,6 +45,7 @@ export type GenerationParams = {
   moduleCount: number;
   symmetry: "none" | "bilateral" | "radial";
   density: number;
+  floorCount: number;
 };
 
 export const MODULE_COLORS: Record<ModuleType, string> = {

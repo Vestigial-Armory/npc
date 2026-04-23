@@ -1,4 +1,5 @@
 import type { Corridor, StationModule } from "../types";
+import { FLOOR_GAP } from "./RoomBox";
 
 type Props = {
   corridor: Corridor;
@@ -6,7 +7,7 @@ type Props = {
 };
 
 function center(m: StationModule) {
-  return { x: m.rect.x + m.rect.w / 2, z: m.rect.y + m.rect.h / 2 };
+  return { x: m.rect.x + m.rect.w / 2, z: m.rect.y + m.rect.h / 2, floor: m.floor };
 }
 
 export function CorridorTube({ corridor, modules }: Props) {
@@ -16,6 +17,7 @@ export function CorridorTube({ corridor, modules }: Props) {
 
   const cf = center(from);
   const ct = center(to);
+  const y = cf.floor * FLOOR_GAP + 0.5;
 
   const dx = ct.x - cf.x;
   const dz = ct.z - cf.z;
@@ -27,9 +29,9 @@ export function CorridorTube({ corridor, modules }: Props) {
   const angle = Math.atan2(dx, dz);
 
   return (
-    <mesh position={[midX, 0.5, midZ]} rotation={[0, angle, 0]}>
+    <mesh position={[midX, y, midZ]} rotation={[0, angle, 0]}>
       <boxGeometry args={[corridor.width * 1.2, 1, length]} />
-      <meshStandardMaterial color="#2a3560" transparent opacity={0.6} roughness={0.8} metalness={0.2} />
+      <meshStandardMaterial color="#2a3560" transparent opacity={0.65} roughness={0.8} metalness={0.2} />
     </mesh>
   );
 }
