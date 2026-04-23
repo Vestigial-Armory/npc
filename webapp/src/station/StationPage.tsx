@@ -38,6 +38,7 @@ export function StationPage() {
   const [params, setParams] = useState<GenerationParams>(DEFAULT_PARAMS);
   const [view, setView] = useState<"2d" | "3d">("2d");
   const [activeFloor, setActiveFloor] = useState(0);
+  const [showSkin, setShowSkin] = useState(false);
   const { state, dispatch } = useEditor();
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -101,6 +102,16 @@ export function StationPage() {
               3D View
             </button>
 
+            {hasLayout && view === "3d" && (
+              <button
+                className="button secondary"
+                style={{ margin: 0, width: "auto", padding: "0.45rem 1rem", borderColor: showSkin ? "#8a97ab" : "#4a5a8a" }}
+                onClick={() => setShowSkin(s => !s)}
+              >
+                {showSkin ? "Interior View" : "Exterior View"}
+              </button>
+            )}
+
             {hasLayout && view === "2d" && floorCount > 1 && (
               <div style={{ display: "flex", gap: "0.35rem", marginLeft: "0.5rem", borderLeft: "1px solid #24305b", paddingLeft: "0.75rem" }}>
                 {floors.map(f => (
@@ -145,6 +156,7 @@ export function StationPage() {
             <StationModel3D
               layout={state.layout}
               selectedId={state.selectedId}
+              showSkin={showSkin}
               dispatch={dispatch}
               width={canvasW}
               height={canvasH}
